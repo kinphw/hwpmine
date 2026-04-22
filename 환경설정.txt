@@ -1,0 +1,16 @@
+1. 내부 pip.ini를 C:\ProgramData\pip\pip.ini 로 이동시킨다. (폴더가 없으면 생성)
+
+2. 프로젝트 압축을 적절한 곳에 푼다 (c:\projects\hwpmine 등)
+
+3. 이하 명령어 콘솔(cmd)에서 실행
+
+pip install - r requirements.txt
+rename .env.example .env
+
+4. .env파일을 설정하여 
+
+4. 다음으로 실행
+python run.py
+
+1, 2, 3번
+

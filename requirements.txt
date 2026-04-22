@@ -1,11 +1,5 @@
-# HWP Mine - Python 의존성
-# 설치: pip install -r requirements.txt
-
-# .env 파일 로드 (config.py)
 python-dotenv>=1.0.0
 
-# MariaDB/MySQL 연결 (inserter.py)
 pymysql>=1.1.0
 
-# HWP COM 자동화 - DRM 파일 파싱 시 필요 (Windows 전용, HWP 설치 필수)
 pywin32>=306

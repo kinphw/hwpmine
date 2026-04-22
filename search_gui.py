@@ -9,8 +9,9 @@ MariaDB에 적재된 HWP 문서를 키워드로 검색하고 클릭하면 파일
 
 import os
 import sys
+import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 
 try:
     import pymysql
@@ -30,7 +31,13 @@ def get_conn():
     return pymysql.connect(**config.get_db_config())
 
 
-def _build_where(keywords: list[str], target: str):
+def _prepare_keywords(keyword: str, mode: str) -> list[str]:
+    if mode == "phrase":
+        return [keyword] if keyword else []
+    return keyword.split() or []
+
+
+def _build_where(keywords: list[str], target: str, mode: str):
     conds, params = [], []
     for kw in keywords:
         like = f"%{kw}%"
@@ -43,42 +50,67 @@ def _build_where(keywords: list[str], target: str):
         else:
             conds.append("(filename LIKE %s OR body_text LIKE %s)")
             params.extend([like, like])
-    return " AND ".join(conds), params
+    joiner = " AND " if mode in ("and", "phrase") else " OR "
+    return joiner.join(conds), params
 
 
-def search(keyword: str, target: str, limit: int = PAGE_SIZE, offset: int = 0):
-    keywords = keyword.split()
-    if not keywords:
-        return []
-    where, params = _build_where(keywords, target)
+def search(keyword: str, target: str, mode: str = "and",
+           limit: int = PAGE_SIZE, offset: int = 0):
+    keywords = _prepare_keywords(keyword, mode)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            sql = f"""
-                SELECT id, directory, filename, LEFT(body_text, 300)
-                FROM `{config.DB_TABLE}`
-                WHERE {where}
-                ORDER BY id
-                LIMIT %s OFFSET %s
-            """
-            cur.execute(sql, (*params, limit, offset))
+            if keywords:
+                where, params = _build_where(keywords, target, mode)
+                sql = f"""
+                    SELECT id, directory, filename, LEFT(body_text, 300)
+                    FROM `{config.DB_TABLE}`
+                    WHERE {where}
+                    ORDER BY id
+                    LIMIT %s OFFSET %s
+                """
+                cur.execute(sql, (*params, limit, offset))
+            else:
+                sql = f"""
+                    SELECT id, directory, filename, LEFT(body_text, 300)
+                    FROM `{config.DB_TABLE}`
+                    ORDER BY id
+                    LIMIT %s OFFSET %s
+                """
+                cur.execute(sql, (limit, offset))
             return cur.fetchall()
     finally:
         conn.close()
 
 
-def count_results(keyword: str, target: str) -> int:
-    keywords = keyword.split()
-    if not keywords:
-        return 0
-    where, params = _build_where(keywords, target)
+def count_results(keyword: str, target: str, mode: str = "and") -> int:
+    keywords = _prepare_keywords(keyword, mode)
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT COUNT(*) FROM `{config.DB_TABLE}` WHERE {where}", params
-            )
+            if keywords:
+                where, params = _build_where(keywords, target, mode)
+                cur.execute(
+                    f"SELECT COUNT(*) FROM `{config.DB_TABLE}` WHERE {where}", params
+                )
+            else:
+                cur.execute(f"SELECT COUNT(*) FROM `{config.DB_TABLE}`")
             return cur.fetchone()[0]
+    finally:
+        conn.close()
+
+
+def delete_rows(ids: list) -> int:
+    if not ids:
+        return 0
+    placeholders = ", ".join(["%s"] * len(ids))
+    sql = f"DELETE FROM `{config.DB_TABLE}` WHERE id IN ({placeholders})"
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, ids)
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 
@@ -91,44 +123,62 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("HWP 문서 검색기")
-        self.root.geometry("1100x650")
-        self.root.minsize(800, 400)
+        self.root.geometry("1100x750")
+        self.root.minsize(800, 500)
 
         self.results: list = []
-        self._full_data: dict = {}   # iid → (id, directory, filename, preview_full)
-        self._tooltip   = None
-        self._offset    = 0
-        self._total     = 0
-        self._last_kw   = ""
+        self._full_data: dict = {}
+        self._tooltip     = None
+        self._offset      = 0
+        self._total       = 0
+        self._last_kw     = ""
         self._last_target = "both"
+        self._last_mode   = "and"
 
         self._build_ui()
         self._bind_events()
 
     def _build_ui(self):
+        # ── 상단: 검색 컨트롤 ────────────────────────────────────
         top = ttk.Frame(self.root, padding=10)
         top.pack(fill=tk.X)
 
-        ttk.Label(top, text="키워드:").pack(side=tk.LEFT)
-        self.entry = ttk.Entry(top, width=40, font=("맑은 고딕", 11))
+        row1 = ttk.Frame(top)
+        row1.pack(fill=tk.X)
+
+        ttk.Label(row1, text="키워드:").pack(side=tk.LEFT)
+        self.entry = ttk.Entry(row1, width=40, font=("맑은 고딕", 11))
         self.entry.pack(side=tk.LEFT, padx=(5, 10))
 
-        self.target_var = tk.StringVar(value="both")
-        ttk.Radiobutton(top, text="제목+본문", variable=self.target_var, value="both").pack(side=tk.LEFT)
-        ttk.Radiobutton(top, text="제목만",   variable=self.target_var, value="title").pack(side=tk.LEFT)
-        ttk.Radiobutton(top, text="본문만",   variable=self.target_var, value="body").pack(side=tk.LEFT)
+        self.btn = ttk.Button(row1, text="검색", command=self._on_search)
+        self.btn.pack(side=tk.LEFT)
 
-        self.btn = ttk.Button(top, text="검색", command=self._on_search)
-        self.btn.pack(side=tk.LEFT, padx=(10, 0))
-
-        self.status = ttk.Label(top, text="", foreground="gray")
+        self.status = ttk.Label(row1, text="", foreground="gray")
         self.status.pack(side=tk.RIGHT)
 
-        mid  = ttk.Frame(self.root)
+        row2 = ttk.Frame(top)
+        row2.pack(fill=tk.X, pady=(5, 0))
+
+        ttk.Label(row2, text="검색 대상:").pack(side=tk.LEFT)
+        self.target_var = tk.StringVar(value="both")
+        ttk.Radiobutton(row2, text="제목+본문", variable=self.target_var, value="both").pack(side=tk.LEFT)
+        ttk.Radiobutton(row2, text="제목만",   variable=self.target_var, value="title").pack(side=tk.LEFT)
+        ttk.Radiobutton(row2, text="본문만",   variable=self.target_var, value="body").pack(side=tk.LEFT)
+
+        ttk.Separator(row2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=12)
+
+        ttk.Label(row2, text="검색 방식:").pack(side=tk.LEFT)
+        self.mode_var = tk.StringVar(value="and")
+        ttk.Radiobutton(row2, text="AND (공백=모두 포함)", variable=self.mode_var, value="and").pack(side=tk.LEFT)
+        ttk.Radiobutton(row2, text="OR (공백=하나라도)",   variable=self.mode_var, value="or").pack(side=tk.LEFT)
+        ttk.Radiobutton(row2, text="전체 문자열",          variable=self.mode_var, value="phrase").pack(side=tk.LEFT)
+
+        # ── 중간: Treeview ────────────────────────────────────────
+        mid = ttk.Frame(self.root)
         mid.pack(fill=tk.BOTH, expand=True, padx=10)
 
         cols = ("id", "directory", "filename", "preview")
-        self.tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="extended")
 
         self.tree.heading("id",        text="ID")
         self.tree.heading("directory", text="폴더")
@@ -150,28 +200,54 @@ class App:
         mid.grid_rowconfigure(0, weight=1)
         mid.grid_columnconfigure(0, weight=1)
 
+        # ── 로그창 ────────────────────────────────────────────────
+        log_frame = ttk.LabelFrame(self.root, text="로그", padding=4)
+        log_frame.pack(fill=tk.X, padx=10, pady=(4, 0))
+
+        self.log_text = scrolledtext.ScrolledText(
+            log_frame, height=5, state="disabled",
+            font=("Consolas", 8), wrap="word",
+            bg="#1e1e1e", fg="#d4d4d4",
+        )
+        self.log_text.pack(fill=tk.X)
+
+        # ── 하단: 버튼 ───────────────────────────────────────────
         bot = ttk.Frame(self.root, padding=10)
         bot.pack(fill=tk.X)
 
-        self.info_label = ttk.Label(bot, text="더블클릭하면 파일을 엽니다.",
-                                     foreground="gray", font=("맑은 고딕", 9))
+        self.info_label = ttk.Label(
+            bot,
+            text="더블클릭: 파일 열기 | Del / 삭제 버튼: 선택 항목 DB에서 삭제",
+            foreground="gray", font=("맑은 고딕", 9),
+        )
         self.info_label.pack(side=tk.LEFT)
 
-        self.open_btn = ttk.Button(bot, text="파일 열기",   command=self._on_open,     state=tk.DISABLED)
+        self.open_btn = ttk.Button(bot, text="파일 열기",  command=self._on_open,   state=tk.DISABLED)
         self.open_btn.pack(side=tk.RIGHT)
 
-        self.all_btn  = ttk.Button(bot, text="전체 조회",   command=self._on_load_all, state=tk.DISABLED)
+        self.del_btn  = ttk.Button(bot, text="삭제 (Del)", command=self._on_delete, state=tk.DISABLED)
+        self.del_btn.pack(side=tk.RIGHT, padx=(0, 5))
+
+        self.all_btn  = ttk.Button(bot, text="전체 조회",  command=self._on_load_all, state=tk.DISABLED)
         self.all_btn.pack(side=tk.RIGHT, padx=(0, 5))
 
         self.more_btn = ttk.Button(bot, text=f"더보기 (+{PAGE_SIZE})", command=self._on_more, state=tk.DISABLED)
         self.more_btn.pack(side=tk.RIGHT, padx=(0, 5))
 
     def _bind_events(self):
-        self.entry.bind("<Return>", lambda e: self._on_search())
-        self.tree.bind("<Double-1>",         lambda e: self._on_open())
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        self.tree.bind("<Motion>",           self._on_hover)
-        self.tree.bind("<Leave>",            self._hide_tooltip)
+        self.entry.bind("<Return>",            lambda e: self._on_search())
+        self.tree.bind("<Double-1>",           lambda e: self._on_open())
+        self.tree.bind("<<TreeviewSelect>>",   self._on_select)
+        self.tree.bind("<Motion>",             self._on_hover)
+        self.tree.bind("<Leave>",              self._hide_tooltip)
+        self.tree.bind("<Delete>",             lambda e: self._on_delete())
+
+    # ── 로그 ─────────────────────────────────────────────────────
+    def _log(self, msg: str):
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", msg + "\n")
+        self.log_text.configure(state="disabled")
+        self.log_text.see("end")
 
     # ── 툴팁 ──────────────────────────────────────────────────────
     def _on_hover(self, event):
@@ -209,10 +285,10 @@ class App:
                  padx=6, pady=4).pack()
 
         tw.update_idletasks()
-        sw, sh   = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        sw, sh     = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         tw_w, tw_h = tw.winfo_width(), tw.winfo_height()
-        if x + tw_w > sw:  x = sw - tw_w - 10
-        if y + tw_h > sh:  y = event.y_root - tw_h - 10
+        if x + tw_w > sw: x = sw - tw_w - 10
+        if y + tw_h > sh: y = event.y_root - tw_h - 10
         tw.wm_geometry(f"+{x}+{y}")
         self._tooltip = tw
 
@@ -249,28 +325,32 @@ class App:
 
     def _on_search(self):
         kw = self.entry.get().strip()
-        if not kw:
-            return
         self.btn.configure(state=tk.DISABLED)
         self.status.configure(text="검색 중...")
         self.root.update()
         try:
             target = self.target_var.get()
+            mode   = self.mode_var.get()
             self._last_kw     = kw
             self._last_target = target
+            self._last_mode   = mode
             self._offset      = 0
-            self._total       = count_results(kw, target)
+            self._total       = count_results(kw, target, mode)
             self.results      = []
             self.tree.delete(*self.tree.get_children())
             self._full_data   = {}
 
-            rows = search(kw, target, offset=0)
+            mode_label = {"and": "AND", "or": "OR", "phrase": "전체문자열"}[mode]
+            self._log(f"[검색] '{kw}' | 대상: {target} | 방식: {mode_label} → {self._total:,}건")
+
+            rows = search(kw, target, mode, offset=0)
             self._offset = len(rows)
             self._insert_rows(rows)
             self._update_status()
         except Exception as e:
             messagebox.showerror("오류", str(e))
             self.status.configure(text="오류")
+            self._log(f"[오류] {e}")
         finally:
             self.btn.configure(state=tk.NORMAL)
 
@@ -279,7 +359,7 @@ class App:
         self.status.configure(text="추가 로딩...")
         self.root.update()
         try:
-            rows = search(self._last_kw, self._last_target, offset=self._offset)
+            rows = search(self._last_kw, self._last_target, self._last_mode, offset=self._offset)
             self._offset += len(rows)
             self._insert_rows(rows)
             self._update_status()
@@ -293,7 +373,7 @@ class App:
         self.status.configure(text=f"전체 로딩 중 ({remaining:,}건)...")
         self.root.update()
         try:
-            rows = search(self._last_kw, self._last_target,
+            rows = search(self._last_kw, self._last_target, self._last_mode,
                           limit=remaining, offset=self._offset)
             self._offset += len(rows)
             self._insert_rows(rows)
@@ -306,18 +386,26 @@ class App:
         sel = self.tree.selection()
         if not sel:
             self.open_btn.configure(state=tk.DISABLED)
+            self.del_btn.configure(state=tk.DISABLED)
             return
-        rid = sel[0]
-        if rid in self._full_data:
-            _, directory, filename, _ = self._full_data[rid]
-            fp      = os.path.join(directory, filename)
-            display = fp if len(fp) <= 90 else fp[:87] + "…"
-            self.info_label.configure(text=display, foreground="black")
+
+        self.del_btn.configure(state=tk.NORMAL)
+
+        if len(sel) == 1:
+            rid = sel[0]
+            if rid in self._full_data:
+                _, directory, filename, _ = self._full_data[rid]
+                fp      = os.path.join(directory, filename)
+                display = fp if len(fp) <= 90 else fp[:87] + "…"
+                self.info_label.configure(text=display, foreground="black")
             self.open_btn.configure(state=tk.NORMAL)
+        else:
+            self.info_label.configure(text=f"{len(sel)}건 선택됨", foreground="black")
+            self.open_btn.configure(state=tk.DISABLED)
 
     def _on_open(self):
         sel = self.tree.selection()
-        if not sel:
+        if not sel or len(sel) != 1:
             return
         rid = sel[0]
         if rid in self._full_data:
@@ -330,6 +418,71 @@ class App:
                 os.startfile(fp)
             except Exception as e:
                 messagebox.showerror("열기 실패", str(e))
+
+    # ── 삭제 ─────────────────────────────────────────────────────
+    def _on_delete(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        ids, names = [], []
+        for iid in sel:
+            if iid in self._full_data:
+                rid, _, filename, _ = self._full_data[iid]
+                ids.append(rid)
+                names.append(filename)
+
+        if not ids:
+            return
+
+        preview = "\n".join(names[:10])
+        if len(names) > 10:
+            preview += f"\n… 외 {len(names) - 10}건"
+
+        confirmed = messagebox.askyesno(
+            "삭제 확인",
+            f"DB에서 {len(ids)}건을 삭제합니다.\n\n{preview}\n\n계속하시겠습니까?",
+        )
+        if not confirmed:
+            self._log("[삭제 취소]")
+            return
+
+        id_preview = str(ids[:10]) + ("..." if len(ids) > 10 else "")
+        self._log(f"[삭제 요청] {len(ids)}건 | ID: {id_preview}")
+        self.del_btn.configure(state=tk.DISABLED)
+
+        threading.Thread(
+            target=self._do_delete,
+            args=(ids, sel),
+            daemon=True,
+        ).start()
+
+    def _do_delete(self, ids: list, iids: tuple):
+        try:
+            affected = delete_rows(ids)
+            self.root.after(0, lambda: self._after_delete(iids, affected))
+        except Exception as e:
+            self.root.after(0, lambda err=e: self._log(f"[오류] 삭제 실패: {err}"))
+            self.root.after(0, lambda: self.del_btn.configure(state=tk.NORMAL))
+
+    def _after_delete(self, iids: tuple, affected: int):
+        iid_set = set(iids)
+        for iid in iids:
+            self._full_data.pop(iid, None)
+            if self.tree.exists(iid):
+                self.tree.delete(iid)
+
+        self._total   = max(0, self._total - affected)
+        self.results  = [r for r in self.results if str(r[0]) not in iid_set]
+        self._offset  = max(0, self._offset - affected)
+
+        self._update_status()
+        self._log(f"[삭제 완료] {affected}건 삭제됨")
+        self.del_btn.configure(state=tk.DISABLED)
+        self.info_label.configure(
+            text="더블클릭: 파일 열기 | Del / 삭제 버튼: 선택 항목 DB에서 삭제",
+            foreground="gray",
+        )
 
 
 def main():
