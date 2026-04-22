@@ -5,12 +5,14 @@ HWP Mine — 통합 런처
   1  스캔   : 드라이브 순회 → CSV 추출   (scanner.py)
   2  적재   : CSV → MariaDB 파싱 적재    (inserter.py)
   3  검색   : DB 기반 GUI 검색기         (search_gui.py)
+  4  추출   : HWP/HWPX → TXT 변환기     (extractor_gui.py)
 
 실행 예:
   python run.py          # 대화형 메뉴
   python run.py 1        # Step 1만
   python run.py 2        # Step 2만
   python run.py 3        # Step 3만
+  python run.py 4        # Step 4만
   python run.py all      # 1 → 2 → 3 순차 실행
 """
 
@@ -25,6 +27,7 @@ BANNER = """\
 ║  1  스캔   HWP 파일 목록 → CSV           ║
 ║  2  적재   CSV → MariaDB 파싱 적재       ║
 ║  3  검색   GUI 검색기 실행               ║
+║  4  추출   HWP/HWPX → TXT 변환기        ║
 ║  all       1 → 2 → 3 순차 실행           ║
 ║  q  종료                                 ║
 ╚══════════════════════════════════════════╝"""
@@ -52,8 +55,14 @@ def run_step3() -> int:
     return 0
 
 
+def run_step4() -> int:
+    import extractor_gui
+    extractor_gui.main()
+    return 0
+
+
 def _step_from_arg(arg: str) -> int | None:
-    mapping = {"1": 1, "2": 2, "3": 3, "all": 0, "q": -1}
+    mapping = {"1": 1, "2": 2, "3": 3, "4": 4, "all": 0, "q": -1}
     return mapping.get(arg.lower())
 
 
@@ -80,6 +89,9 @@ def main() -> int:
 
     if step == 3:
         return run_step3()
+
+    if step == 4:
+        return run_step4()
 
     if step == 0:   # all
         rc = run_step1()
