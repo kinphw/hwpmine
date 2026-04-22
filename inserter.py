@@ -98,13 +98,15 @@ class PB:
     def __init__(self, total, offset=0):
         self.total = total
         self.offset = offset
-        self.cur = self.ok = self.err = self.crash = 0
+        self.cur = self.ok = self.err = self.crash = self.skip = 0
         self.t0 = time.time()
 
     def tick(self, status="success"):
         self.cur += 1
         if status == "success":
             self.ok += 1
+        elif status == "skip":
+            self.skip += 1
         elif status == "crash":
             self.crash += 1
         else:
@@ -116,20 +118,22 @@ class PB:
         w   = 30
         bar = "#" * int(w * pct) + "." * (w - int(w * pct))
         idx = self.offset + self.cur
+        skip_str = f" skip:{self.skip}" if self.skip else ""
         crash_str = f" crash:{self.crash}" if self.crash else ""
         print(
             f"\r  [{bar}] {idx}/{self.offset + self.total}"
-            f"  ok:{self.ok} err:{self.err}{crash_str}"
+            f"  ok:{self.ok} err:{self.err}{skip_str}{crash_str}"
             f"  ETA {int(eta//60)}:{int(eta%60):02d}  ",
             end="", flush=True,
         )
 
     def done(self):
         el = time.time() - self.t0
+        skip_str = f" skip:{self.skip}" if self.skip else ""
         crash_str = f" crash:{self.crash}" if self.crash else ""
         print(
             f"\n  완료: {int(el//60)}분{int(el%60)}초"
-            f"  ok:{self.ok} err:{self.err}{crash_str}"
+            f"  ok:{self.ok} err:{self.err}{skip_str}{crash_str}"
         )
 
 
@@ -293,6 +297,31 @@ def _spawn_worker(task_q, result_q):
     return w
 
 
+def _load_existing_keys(conn, rows, chunk_size: int = 500):
+    keys = {
+        (row["directory"], row["filename"])
+        for row in rows
+        if row.get("directory") and row.get("filename")
+    }
+    if not keys:
+        return set()
+
+    existing = set()
+    key_list = list(keys)
+    for i in range(0, len(key_list), chunk_size):
+        chunk = key_list[i:i + chunk_size]
+        placeholders = ", ".join(["(%s, %s)"] * len(chunk))
+        sql = (
+            f"SELECT directory, filename FROM `{config.DB_TABLE}` "
+            f"WHERE (directory, filename) IN ({placeholders})"
+        )
+        params = [item for pair in chunk for item in pair]
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            existing.update(cur.fetchall())
+    return existing
+
+
 def run(csv_path: str, start: int = 0, end=None) -> int:
     all_rows = []
     with open(csv_path, encoding="utf-8-sig") as f:
@@ -310,6 +339,9 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
 
     create_db()
     conn = get_conn()
+    known_keys = _load_existing_keys(conn, rows)
+    if known_keys:
+        print(f"  v DB 기존 파일 {len(known_keys):,}건은 파싱 없이 건너뜁니다.")
 
     err_f = open(ERROR_LOG, "a", newline="", encoding="utf-8-sig")
     err_w = csv.writer(err_f)
@@ -327,6 +359,7 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
             d, fn = row["directory"], row["filename"]
             ext   = row.get("extension", "").lower()
             fp    = os.path.join(d, fn)
+            key   = (d, fn)
 
             def _record_error(msg, _d=d, _fn=fn, _ext=ext, _row=row):
                 nonlocal pending
@@ -337,9 +370,14 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
                             _row.get("size_bytes", 0), _row.get("modified", ""),
                             None, "error", msg,
                         ))
+                    known_keys.add((_d, _fn))
                     pending += 1
                 except Exception:
                     pass
+
+            if key in known_keys:
+                pb.tick("skip")
+                continue
 
             if not os.path.exists(fp):
                 _record_error("파일 없음")
@@ -394,6 +432,7 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
                         row.get("size_bytes", 0), row.get("modified", ""),
                         text, status, errmsg,
                     ))
+                known_keys.add(key)
                 pending += 1
             except Exception as e:
                 err_w.writerow([d, fn, f"DB: {e}"])
