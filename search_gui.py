@@ -55,8 +55,9 @@ def _build_where(keywords: list[str], target: str, mode: str):
 
 
 def search(keyword: str, target: str, mode: str = "and",
-           limit: int = PAGE_SIZE, offset: int = 0):
+           limit: int = PAGE_SIZE, offset: int = 0, include_excluded: bool = False):
     keywords = _prepare_keywords(keyword, mode)
+    null_filter = "" if include_excluded else "body_text IS NOT NULL AND body_text != '' AND "
     conn = get_conn()
     try:
         with conn.cursor() as cur:
@@ -65,15 +66,17 @@ def search(keyword: str, target: str, mode: str = "and",
                 sql = f"""
                     SELECT id, directory, filename, LEFT(body_text, 300)
                     FROM `{config.DB_TABLE}`
-                    WHERE {where}
+                    WHERE {null_filter}({where})
                     ORDER BY id
                     LIMIT %s OFFSET %s
                 """
                 cur.execute(sql, (*params, limit, offset))
             else:
+                where_clause = "" if include_excluded else "WHERE body_text IS NOT NULL AND body_text != ''"
                 sql = f"""
                     SELECT id, directory, filename, LEFT(body_text, 300)
                     FROM `{config.DB_TABLE}`
+                    {where_clause}
                     ORDER BY id
                     LIMIT %s OFFSET %s
                 """
@@ -83,24 +86,43 @@ def search(keyword: str, target: str, mode: str = "and",
         conn.close()
 
 
-def count_results(keyword: str, target: str, mode: str = "and") -> int:
+def count_results(keyword: str, target: str, mode: str = "and", include_excluded: bool = False) -> int:
     keywords = _prepare_keywords(keyword, mode)
+    null_filter = "" if include_excluded else "body_text IS NOT NULL AND body_text != '' AND "
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             if keywords:
                 where, params = _build_where(keywords, target, mode)
                 cur.execute(
-                    f"SELECT COUNT(*) FROM `{config.DB_TABLE}` WHERE {where}", params
+                    f"SELECT COUNT(*) FROM `{config.DB_TABLE}` WHERE {null_filter}({where})", params
                 )
             else:
-                cur.execute(f"SELECT COUNT(*) FROM `{config.DB_TABLE}`")
+                where_clause = "" if include_excluded else "WHERE body_text IS NOT NULL AND body_text != ''"
+                cur.execute(f"SELECT COUNT(*) FROM `{config.DB_TABLE}` {where_clause}")
             return cur.fetchone()[0]
     finally:
         conn.close()
 
 
+def nullify_body_text(ids: list) -> int:
+    """레코드는 유지하되 body_text를 NULL 처리해 검색에서 제외한다."""
+    if not ids:
+        return 0
+    placeholders = ", ".join(["%s"] * len(ids))
+    sql = f"UPDATE `{config.DB_TABLE}` SET body_text = NULL WHERE id IN ({placeholders})"
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, ids)
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def delete_rows(ids: list) -> int:
+    """레코드 자체를 DB에서 완전히 삭제한다."""
     if not ids:
         return 0
     placeholders = ", ".join(["%s"] * len(ids))
@@ -128,12 +150,14 @@ class App:
 
         self.results: list = []
         self._full_data: dict = {}
+        self._excluded_ids: set = set()
         self._tooltip     = None
         self._offset      = 0
         self._total       = 0
-        self._last_kw     = ""
-        self._last_target = "both"
-        self._last_mode   = "and"
+        self._last_kw              = ""
+        self._last_target          = "both"
+        self._last_mode            = "and"
+        self._last_include_excluded = False
 
         self._build_ui()
         self._bind_events()
@@ -173,6 +197,13 @@ class App:
         ttk.Radiobutton(row2, text="OR (공백=하나라도)",   variable=self.mode_var, value="or").pack(side=tk.LEFT)
         ttk.Radiobutton(row2, text="전체 문자열",          variable=self.mode_var, value="phrase").pack(side=tk.LEFT)
 
+        ttk.Separator(row2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=12)
+        self.include_excluded_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            row2, text="제외 항목 포함", variable=self.include_excluded_var,
+            command=self._on_search,
+        ).pack(side=tk.LEFT)
+
         # ── 중간: Treeview ────────────────────────────────────────
         mid = ttk.Frame(self.root)
         mid.pack(fill=tk.BOTH, expand=True, padx=10)
@@ -193,6 +224,8 @@ class App:
         vsb = ttk.Scrollbar(mid, orient=tk.VERTICAL,   command=self.tree.yview)
         hsb = ttk.Scrollbar(mid, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.tree.tag_configure("excluded", foreground="#999999")
 
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
@@ -217,7 +250,7 @@ class App:
 
         self.info_label = ttk.Label(
             bot,
-            text="더블클릭: 파일 열기 | Del / 삭제 버튼: 선택 항목 DB에서 삭제",
+            text="더블클릭: 파일 열기 | Del / 제외 버튼: 선택 항목 검색에서 제외",
             foreground="gray", font=("맑은 고딕", 9),
         )
         self.info_label.pack(side=tk.LEFT)
@@ -225,7 +258,7 @@ class App:
         self.open_btn = ttk.Button(bot, text="파일 열기",  command=self._on_open,   state=tk.DISABLED)
         self.open_btn.pack(side=tk.RIGHT)
 
-        self.del_btn  = ttk.Button(bot, text="삭제 (Del)", command=self._on_delete, state=tk.DISABLED)
+        self.del_btn  = ttk.Button(bot, text="제외 (Del)", command=self._on_delete, state=tk.DISABLED)
         self.del_btn.pack(side=tk.RIGHT, padx=(0, 5))
 
         self.all_btn  = ttk.Button(bot, text="전체 조회",  command=self._on_load_all, state=tk.DISABLED)
@@ -301,14 +334,18 @@ class App:
     def _insert_rows(self, rows):
         for row in rows:
             rid, directory, filename, preview = row
-            preview_full  = (preview or "").replace("\r", "").replace("\n", " ").strip()
+            is_excluded   = not preview  # NULL 또는 빈 문자열
+            preview_full  = ("" if is_excluded else (preview or "")).replace("\r", "").replace("\n", " ").strip()
             preview_short = preview_full[:150] + "…" if len(preview_full) > 150 else preview_full
             dir_short     = directory[:57] + "…" if len(directory) > 60 else directory
             fn_short      = filename[:50]  + "…" if len(filename) > 53  else filename
 
+            tags = ("excluded",) if is_excluded else ()
             self.tree.insert("", tk.END, iid=str(rid),
-                             values=(rid, dir_short, fn_short, preview_short))
+                             values=(rid, dir_short, fn_short, preview_short), tags=tags)
             self._full_data[str(rid)] = (rid, directory, filename, preview_full)
+            if is_excluded:
+                self._excluded_ids.add(str(rid))
         self.results.extend(rows)
 
     def _update_status(self):
@@ -329,21 +366,25 @@ class App:
         self.status.configure(text="검색 중...")
         self.root.update()
         try:
-            target = self.target_var.get()
-            mode   = self.mode_var.get()
-            self._last_kw     = kw
-            self._last_target = target
-            self._last_mode   = mode
+            target           = self.target_var.get()
+            mode             = self.mode_var.get()
+            include_excluded = self.include_excluded_var.get()
+            self._last_kw               = kw
+            self._last_target           = target
+            self._last_mode             = mode
+            self._last_include_excluded = include_excluded
             self._offset      = 0
-            self._total       = count_results(kw, target, mode)
+            self._total       = count_results(kw, target, mode, include_excluded)
             self.results      = []
             self.tree.delete(*self.tree.get_children())
             self._full_data   = {}
+            self._excluded_ids = set()
 
             mode_label = {"and": "AND", "or": "OR", "phrase": "전체문자열"}[mode]
-            self._log(f"[검색] '{kw}' | 대상: {target} | 방식: {mode_label} → {self._total:,}건")
+            excl_label = " [제외 포함]" if include_excluded else ""
+            self._log(f"[검색] '{kw}' | 대상: {target} | 방식: {mode_label}{excl_label} → {self._total:,}건")
 
-            rows = search(kw, target, mode, offset=0)
+            rows = search(kw, target, mode, offset=0, include_excluded=include_excluded)
             self._offset = len(rows)
             self._insert_rows(rows)
             self._update_status()
@@ -359,7 +400,8 @@ class App:
         self.status.configure(text="추가 로딩...")
         self.root.update()
         try:
-            rows = search(self._last_kw, self._last_target, self._last_mode, offset=self._offset)
+            rows = search(self._last_kw, self._last_target, self._last_mode,
+                          offset=self._offset, include_excluded=self._last_include_excluded)
             self._offset += len(rows)
             self._insert_rows(rows)
             self._update_status()
@@ -374,7 +416,8 @@ class App:
         self.root.update()
         try:
             rows = search(self._last_kw, self._last_target, self._last_mode,
-                          limit=remaining, offset=self._offset)
+                          limit=remaining, offset=self._offset,
+                          include_excluded=self._last_include_excluded)
             self._offset += len(rows)
             self._insert_rows(rows)
             self._update_status()
@@ -386,10 +429,19 @@ class App:
         sel = self.tree.selection()
         if not sel:
             self.open_btn.configure(state=tk.DISABLED)
-            self.del_btn.configure(state=tk.DISABLED)
+            self.del_btn.configure(state=tk.DISABLED, text="제외 (Del)")
             return
 
-        self.del_btn.configure(state=tk.NORMAL)
+        excluded_sel = [iid for iid in sel if iid in self._excluded_ids]
+        normal_sel   = [iid for iid in sel if iid not in self._excluded_ids]
+        mixed        = bool(excluded_sel) and bool(normal_sel)
+
+        if mixed:
+            self.del_btn.configure(state=tk.DISABLED, text="혼합 선택 불가")
+        elif excluded_sel:
+            self.del_btn.configure(state=tk.NORMAL,   text="완전 삭제 (Del)")
+        else:
+            self.del_btn.configure(state=tk.NORMAL,   text="제외 (Del)")
 
         if len(sel) == 1:
             rid = sel[0]
@@ -419,14 +471,22 @@ class App:
             except Exception as e:
                 messagebox.showerror("열기 실패", str(e))
 
-    # ── 삭제 ─────────────────────────────────────────────────────
+    # ── 제외 / 완전 삭제 ─────────────────────────────────────────
     def _on_delete(self):
         sel = self.tree.selection()
         if not sel:
             return
 
+        excluded_sel = [iid for iid in sel if iid in self._excluded_ids]
+        normal_sel   = [iid for iid in sel if iid not in self._excluded_ids]
+        if excluded_sel and normal_sel:
+            return  # 혼합 선택 — 버튼이 이미 비활성이라 여기 올 일 없음
+
+        is_hard_delete = bool(excluded_sel)
+        target_iids    = excluded_sel if is_hard_delete else list(sel)
+
         ids, names = [], []
-        for iid in sel:
+        for iid in target_iids:
             if iid in self._full_data:
                 rid, _, filename, _ = self._full_data[iid]
                 ids.append(rid)
@@ -439,36 +499,47 @@ class App:
         if len(names) > 10:
             preview += f"\n… 외 {len(names) - 10}건"
 
-        confirmed = messagebox.askyesno(
-            "삭제 확인",
-            f"DB에서 {len(ids)}건을 삭제합니다.\n\n{preview}\n\n계속하시겠습니까?",
-        )
+        if is_hard_delete:
+            confirmed = messagebox.askyesno(
+                "완전 삭제 확인",
+                f"{len(ids)}건을 DB에서 완전히 삭제합니다.\n(레코드 자체가 제거되며, 로컬 파일은 유지됩니다)\n\n{preview}\n\n계속하시겠습니까?",
+            )
+            action_label = "완전 삭제"
+        else:
+            confirmed = messagebox.askyesno(
+                "제외 확인",
+                f"{len(ids)}건을 검색에서 제외합니다.\n(레코드는 유지되며 body_text만 초기화됩니다)\n\n{preview}\n\n계속하시겠습니까?",
+            )
+            action_label = "제외"
+
         if not confirmed:
-            self._log("[삭제 취소]")
+            self._log(f"[{action_label} 취소]")
             return
 
         id_preview = str(ids[:10]) + ("..." if len(ids) > 10 else "")
-        self._log(f"[삭제 요청] {len(ids)}건 | ID: {id_preview}")
+        self._log(f"[{action_label} 요청] {len(ids)}건 | ID: {id_preview}")
         self.del_btn.configure(state=tk.DISABLED)
 
         threading.Thread(
             target=self._do_delete,
-            args=(ids, sel),
+            args=(ids, tuple(target_iids), is_hard_delete),
             daemon=True,
         ).start()
 
-    def _do_delete(self, ids: list, iids: tuple):
+    def _do_delete(self, ids: list, iids: tuple, is_hard_delete: bool):
         try:
-            affected = delete_rows(ids)
-            self.root.after(0, lambda: self._after_delete(iids, affected))
+            affected = delete_rows(ids) if is_hard_delete else nullify_body_text(ids)
+            self.root.after(0, lambda: self._after_delete(iids, affected, is_hard_delete))
         except Exception as e:
-            self.root.after(0, lambda err=e: self._log(f"[오류] 삭제 실패: {err}"))
+            action = "완전 삭제" if is_hard_delete else "제외"
+            self.root.after(0, lambda err=e: self._log(f"[오류] {action} 처리 실패: {err}"))
             self.root.after(0, lambda: self.del_btn.configure(state=tk.NORMAL))
 
-    def _after_delete(self, iids: tuple, affected: int):
+    def _after_delete(self, iids: tuple, affected: int, is_hard_delete: bool):
         iid_set = set(iids)
         for iid in iids:
             self._full_data.pop(iid, None)
+            self._excluded_ids.discard(iid)
             if self.tree.exists(iid):
                 self.tree.delete(iid)
 
@@ -477,10 +548,13 @@ class App:
         self._offset  = max(0, self._offset - affected)
 
         self._update_status()
-        self._log(f"[삭제 완료] {affected}건 삭제됨")
-        self.del_btn.configure(state=tk.DISABLED)
+        if is_hard_delete:
+            self._log(f"[완전 삭제 완료] {affected}건 DB에서 삭제됨 (로컬 파일 유지)")
+        else:
+            self._log(f"[제외 완료] {affected}건 검색에서 제외됨 (레코드 유지)")
+        self.del_btn.configure(state=tk.DISABLED, text="제외 (Del)")
         self.info_label.configure(
-            text="더블클릭: 파일 열기 | Del / 삭제 버튼: 선택 항목 DB에서 삭제",
+            text="더블클릭: 파일 열기 | Del / 제외 버튼: 선택 항목 검색에서 제외",
             foreground="gray",
         )
 
