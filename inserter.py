@@ -190,15 +190,47 @@ def worker_main(task_q, result_q):
     def _popup_loop():
         try:
             import win32gui
+            import win32process
+            import psutil
         except ImportError:
             return
         BTNS = ["접근 허용(&A)", "접근 허용", "확인(&O)", "확인", "OK",
                 "아니오(&N)", "예(&Y)", "취소(&C)", "취소",
                 "저장(&Y)", "저장"]
+        HWP_PROCS = {"hwp.exe", "hwpframe.exe"}
+
+        hwp_pids = set()
+        last_scan = 0.0
+
+        def _refresh_pids():
+            pids = set()
+            for p in psutil.process_iter(["pid", "name"]):
+                try:
+                    if (p.info["name"] or "").lower() in HWP_PROCS:
+                        pids.add(p.info["pid"])
+                except Exception:
+                    pass
+            return pids
+
         while True:
             try:
+                now = time.time()
+                if now - last_scan > 2.0:
+                    hwp_pids = _refresh_pids()
+                    last_scan = now
+
+                if not hwp_pids:
+                    time.sleep(0.5)
+                    continue
+
                 def _on(h, _):
                     if not win32gui.IsWindowVisible(h):
+                        return
+                    try:
+                        _, pid = win32process.GetWindowThreadProcessId(h)
+                        if pid not in hwp_pids:
+                            return
+                    except Exception:
                         return
                     def _c(c, _):
                         try:

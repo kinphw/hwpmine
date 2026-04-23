@@ -3,3 +3,5 @@ python-dotenv>=1.0.0
 pymysql>=1.1.0
 
 pywin32>=306
+
+psutil>=5.9.0
