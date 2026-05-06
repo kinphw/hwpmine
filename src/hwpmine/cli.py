@@ -2,18 +2,17 @@
 HWP Mine — 통합 런처
 =====================
 파이프라인:
-  1  스캔   : 드라이브 순회 → CSV 추출   (scanner.py)
-  2  적재   : CSV → MariaDB 파싱 적재    (inserter.py)
-  3  검색   : DB 기반 GUI 검색기         (search_gui.py)
-  4  추출   : HWP/HWPX → TXT 변환기     (extractor_gui.py)
+  1  스캔   : 드라이브 순회 → CSV 추출   (scanner)
+  2  적재   : CSV → MariaDB 파싱 적재    (inserter)
+  3  검색   : DB 기반 GUI 검색기         (search_gui)
+  4  추출   : HWP/HWPX → TXT 변환기     (extractor_gui)
 
 실행 예:
-  python run.py          # 대화형 메뉴
-  python run.py 1        # Step 1만
-  python run.py 2        # Step 2만
-  python run.py 3        # Step 3만
-  python run.py 4        # Step 4만
-  python run.py all      # 1 → 2 → 3 순차 실행
+  hwpmine            # 대화형 메뉴
+  hwpmine 1          # Step 1만
+  hwpmine all        # 1 → 2 → 3 순차 실행
+또는 모듈 호출:
+  python -m hwpmine
 """
 
 import sys
@@ -34,14 +33,13 @@ BANNER = """\
 
 
 def run_step1() -> int:
-    import scanner
+    from . import scanner
     return scanner.run()
 
 
 def run_step2() -> int:
-    import inserter
     from pathlib import Path
-    import config
+    from . import inserter, config
     if not Path(config.CSV_FILE).exists():
         print(f"  ✗ CSV 없음: {config.CSV_FILE}")
         print("  먼저 Step 1(스캔)을 실행하거나 .env의 CSV_FILE 경로를 확인하세요.")
@@ -50,13 +48,13 @@ def run_step2() -> int:
 
 
 def run_step3() -> int:
-    import search_gui
+    from . import search_gui
     search_gui.main()
     return 0
 
 
 def run_step4() -> int:
-    import extractor_gui
+    from . import extractor_gui
     extractor_gui.main()
     return 0
 
@@ -67,6 +65,7 @@ def _step_from_arg(arg: str) -> int | None:
 
 
 def main() -> int:
+    mp.freeze_support()
     if len(sys.argv) > 1:
         choice = sys.argv[1]
     else:
@@ -108,5 +107,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    mp.freeze_support()   # Windows exe 패키징 대비
     sys.exit(main())

@@ -16,7 +16,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-import config
+from . import config
 
 TARGET_EXTENSIONS = {".hwp", ".hwpx"}
 SKIP_DIRS = {"$Recycle.Bin", "System Volume Information", "Windows", "ProgramData"}

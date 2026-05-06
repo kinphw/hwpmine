@@ -24,17 +24,14 @@ import multiprocessing as mp
 from pathlib import Path
 from queue import Empty
 
-try:
-    from main import configure_logging
-except ImportError:
-    raise SystemExit("main.py를 이 스크립트와 같은 폴더에 두세요.")
+from .hwp_parser import configure_logging
 
 try:
     import pymysql
 except ImportError:
     raise SystemExit("pymysql 필요: pip install pymysql")
 
-import config
+from . import config
 
 ERROR_LOG = "hwp_parse_errors.csv"
 
@@ -167,7 +164,7 @@ def worker_main(task_q, result_q):
     별도 프로세스로 실행. COM 인스턴스를 유지하며 파일을 파싱.
     크래시 시 이 프로세스만 종료 -> 메인이 새 워커를 띄움.
     """
-    from main import ZipDocReader, SectionParser, HWPXDrmError
+    from .hwp_parser import ZipDocReader, SectionParser, HWPXDrmError
 
     zip_reader = ZipDocReader()
     sec_parser = SectionParser()

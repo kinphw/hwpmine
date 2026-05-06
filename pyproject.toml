@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hwpmine"
+dynamic = ["version"]
+description = "HWP/HWPX 파일을 스캔·파싱하여 MariaDB에 적재하고 GUI로 검색하는 파이프라인 도구"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Park Hyungwon" }]
+license = { text = "Proprietary" }
+keywords = ["hwp", "hwpx", "hancom", "mariadb", "search"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Win32 (MS Windows)",
+    "Topic :: Text Processing",
+]
+
+dependencies = [
+    "pymysql>=1.1",
+    "python-dotenv>=1.0",
+    'pywin32>=306; sys_platform == "win32"',
+]
+
+[project.scripts]
+hwpmine = "hwpmine.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.dynamic]
+version = { attr = "hwpmine.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

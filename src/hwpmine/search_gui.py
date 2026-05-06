@@ -18,7 +18,7 @@ try:
 except ImportError:
     raise SystemExit("pymysql 필요: pip install pymysql")
 
-import config
+from . import config
 
 PAGE_SIZE = 200
 

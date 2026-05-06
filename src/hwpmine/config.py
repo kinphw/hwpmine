@@ -1,4 +1,11 @@
-"""공통 설정 — .env에서 값을 읽어 전체 모듈에 제공."""
+"""공통 설정 — .env에서 값을 읽어 전체 모듈에 제공.
+
+.env 탐색 우선순위
+  1. 환경변수 HWPMINE_ENV 가 지정한 경로
+  2. 현재 작업 디렉터리의 ./.env
+  3. %APPDATA%\\hwpmine\\.env   (Windows 사용자 설정)
+  4. ~/.config/hwpmine/.env     (기타 플랫폼)
+"""
 
 import os
 from pathlib import Path
@@ -8,7 +15,37 @@ try:
 except ImportError:
     raise SystemExit("python-dotenv 필요: pip install python-dotenv")
 
-load_dotenv(Path(__file__).parent / ".env")
+
+def _candidate_env_paths() -> list[Path]:
+    paths: list[Path] = []
+
+    override = os.environ.get("HWPMINE_ENV")
+    if override:
+        paths.append(Path(override).expanduser())
+
+    paths.append(Path.cwd() / ".env")
+
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            paths.append(Path(appdata) / "hwpmine" / ".env")
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".config"
+        paths.append(base / "hwpmine" / ".env")
+
+    return paths
+
+
+def _load_env() -> Path | None:
+    for p in _candidate_env_paths():
+        if p.is_file():
+            load_dotenv(p, override=False)
+            return p
+    return None
+
+
+ENV_PATH = _load_env()
 
 # ── DB ────────────────────────────────────────────────────────
 DB_HOST     = os.getenv("DB_HOST", "127.0.0.1")

@@ -17,15 +17,8 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 from pathlib import Path
 from queue import Empty
 
-try:
-    from inserter import worker_main, _kill_hwp
-except ImportError:
-    raise SystemExit("inserter.py를 이 스크립트와 같은 폴더에 두세요.")
-
-try:
-    import config
-except ImportError:
-    raise SystemExit("config.py를 이 스크립트와 같은 폴더에 두세요.")
+from .inserter import worker_main, _kill_hwp
+from . import config
 
 TARGET_EXT = {".hwp", ".hwpx"}
 SEPARATOR  = "=" * 80
