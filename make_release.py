@@ -1,13 +1,14 @@
-"""배포용 zip 생성 스크립트.
+"""배포용 zip 생성 스크립트 (단일 실행파일 버전).
 
 사용법:
-    python -m build --wheel     # 먼저 wheel 을 빌드해두고
-    python make_release.py      # 그 다음 실행
+    pyinstaller --onefile --name hwpmine --paths src \
+        --collect-submodules hwpmine pyinstaller_entry.py
+    python make_release.py
 
 수행 작업:
     1) src/hwpmine/__init__.py 의 버전 읽기
-    2) dist/ 에서 해당 버전의 wheel 찾기
-    3) release/hwpmine_v<버전>/ 에 whl, install.bat, .env.example, README.md 모음
+    2) dist/hwpmine.exe 가 있는지 확인
+    3) release/hwpmine_v<버전>/ 에 exe, install.bat, .env.example, README.md 모음
     4) hwpmine_v<버전>.zip 으로 압축
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parent
 INIT_PY = ROOT / "src" / "hwpmine" / "__init__.py"
 DIST = ROOT / "dist"
 RELEASE = ROOT / "release"
+EXE_NAME = "hwpmine.exe"
 
 INCLUDE = ["install.bat", ".env.example", "README.md"]
 
@@ -34,23 +36,25 @@ def read_version() -> str:
     return m.group(1)
 
 
-def find_wheel(version: str) -> Path:
-    wheel = DIST / f"hwpmine-{version}-py3-none-any.whl"
-    if not wheel.exists():
+def find_exe() -> Path:
+    exe = DIST / EXE_NAME
+    if not exe.exists():
         sys.exit(
-            f"[오류] wheel 이 없습니다: {wheel}\n"
-            f"       먼저 'python -m build --wheel' 로 빌드하세요."
+            f"[오류] 실행파일이 없습니다: {exe}\n"
+            f"       먼저 다음 명령으로 빌드하세요:\n"
+            f"         pyinstaller --onefile --name hwpmine --paths src "
+            f"--collect-submodules hwpmine pyinstaller_entry.py"
         )
-    return wheel
+    return exe
 
 
-def stage(version: str, wheel: Path) -> Path:
+def stage(version: str, exe: Path) -> Path:
     stage_dir = RELEASE / f"hwpmine_v{version}"
     if stage_dir.exists():
         shutil.rmtree(stage_dir)
     stage_dir.mkdir(parents=True)
 
-    shutil.copy2(wheel, stage_dir / wheel.name)
+    shutil.copy2(exe, stage_dir / exe.name)
     for name in INCLUDE:
         src = ROOT / name
         if not src.exists():
@@ -74,15 +78,15 @@ def main() -> None:
     version = read_version()
     print(f"버전: {version}")
 
-    wheel = find_wheel(version)
-    stage_dir = stage(version, wheel)
+    exe = find_exe()
+    stage_dir = stage(version, exe)
     zip_path = make_zip(stage_dir, version)
 
     print()
     print("=" * 60)
     print(f"  완료: {zip_path.name}")
     print(f"  경로: {zip_path}")
-    print(f"  내용: {wheel.name}, " + ", ".join(INCLUDE))
+    print(f"  내용: {exe.name}, " + ", ".join(INCLUDE))
     print("=" * 60)
 
 

@@ -10,3 +10,8 @@ build/
 dist/
 *.egg-info/
 *.egg
+
+# pyinstaller
+*.spec
+release/
+hwpmine_v*.zip

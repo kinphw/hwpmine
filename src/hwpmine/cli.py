@@ -66,6 +66,11 @@ def _step_from_arg(arg: str) -> int | None:
 
 def main() -> int:
     mp.freeze_support()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
     if len(sys.argv) > 1:
         choice = sys.argv[1]
     else:
