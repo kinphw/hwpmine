@@ -11,17 +11,54 @@ HWP / HWPX → TXT 변환기
 import os
 import sys
 import time
+import subprocess
 import multiprocessing as mp
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from pathlib import Path
 from queue import Empty
 
-from .inserter import worker_main, _kill_hwp
+from .inserter import worker_main
 from . import config
 
 TARGET_EXT = {".hwp", ".hwpx"}
 SEPARATOR  = "=" * 80
+HWP_PROCESS_NAMES = ("Hwp.exe", "HwpFrame.exe")
+
+
+# ═══════════════════════════════════════════════════════════════
+# HWP 프로세스 PID 추적 — 사용자가 외부에서 띄워둔 한/글은 건드리지 않고
+# 본 세션 중에 새로 생성된 인스턴스만 정리하기 위한 보조 함수.
+# ═══════════════════════════════════════════════════════════════
+
+def _get_hwp_pids() -> set[int]:
+    pids: set[int] = set()
+    for image in HWP_PROCESS_NAMES:
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            continue
+        text = out.stdout.decode("cp949", errors="ignore")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("INFO:"):
+                continue
+            parts = [p.strip().strip('"') for p in line.split(",")]
+            if len(parts) >= 2 and parts[1].isdigit():
+                pids.add(int(parts[1]))
+    return pids
+
+
+def _kill_pids(pids) -> None:
+    for pid in pids:
+        try:
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -236,6 +273,8 @@ class ExtractorApp:
     # ── 변환 실행 (백그라운드 스레드) ─────────────────────────
 
     def _run(self, src: str, dst: str, single: bool):
+        initial_hwp_pids = _get_hwp_pids()
+
         try:
             files = collect_files(src, single)
         except Exception as e:
@@ -288,7 +327,9 @@ class ExtractorApp:
                             worker.join(timeout=5)
                         except Exception:
                             pass
-                        _kill_hwp()
+                        new_hwp = _get_hwp_pids() - initial_hwp_pids
+                        if new_hwp:
+                            _kill_pids(new_hwp)
                         import time as _t; _t.sleep(1)
                         task_q   = mp.Queue()
                         result_q = mp.Queue()
@@ -323,7 +364,10 @@ class ExtractorApp:
                 worker.kill()
             except Exception:
                 pass
-            _kill_hwp()
+            new_hwp = _get_hwp_pids() - initial_hwp_pids
+            if new_hwp:
+                _kill_pids(new_hwp)
+                self._log(f"  세션 중 생성된 HWP 인스턴스 {len(new_hwp)}개 정리 (기존 한/글은 유지)")
 
         elapsed = time.time() - t0
         self._log(
