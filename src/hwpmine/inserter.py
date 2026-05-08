@@ -159,10 +159,13 @@ def _clean(text: str) -> str:
     return re.sub(r"[\x00-\x08\x0c\x0e-\x1b]", "", text).strip()
 
 
-def worker_main(task_q, result_q):
+def worker_main(task_q, result_q, kill_hwp=True):
     """
     별도 프로세스로 실행. COM 인스턴스를 유지하며 파일을 파싱.
     크래시 시 이 프로세스만 종료 -> 메인이 새 워커를 띄움.
+
+    kill_hwp=False 로 호출하면 COM 재활용/종료 시 Hwp.exe taskkill 을 생략한다.
+    extractor 처럼 사용자가 외부에서 한/글을 띄워두고 사용하는 경로에서 쓰임.
     """
     from .hwp_parser import ZipDocReader, SectionParser, HWPXDrmError
 
@@ -249,7 +252,8 @@ def worker_main(task_q, result_q):
             except Exception:
                 pass
             com = None
-            _kill_hwp()
+            if kill_hwp:
+                _kill_hwp()
             time.sleep(1)
         return text
 
@@ -281,7 +285,8 @@ def worker_main(task_q, result_q):
             del com
         except Exception:
             pass
-    _kill_hwp()
+    if kill_hwp:
+        _kill_hwp()
 
 
 # ================================================================
