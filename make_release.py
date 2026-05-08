@@ -70,7 +70,7 @@ def make_zip(stage_dir: Path, version: str) -> Path:
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in stage_dir.rglob("*"):
             if p.is_file():
-                zf.write(p, arcname=p.relative_to(stage_dir.parent))
+                zf.write(p, arcname=p.relative_to(stage_dir))
     return zip_path
 
 
