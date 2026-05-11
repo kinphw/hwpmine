@@ -178,7 +178,11 @@ def worker_main(task_q, result_q, kill_hwp=True):
         nonlocal com
         if com is None:
             import win32com.client as win32
-            com = win32.gencache.EnsureDispatch("HwpFrame.HwpObject")
+            # DispatchEx 로 신규 한/글 프로세스를 강제 생성한다.
+            # gencache.EnsureDispatch 는 ROT(Running Object Table)에서 기존
+            # 한/글 인스턴스를 찾으면 거기에 어태치해버려, 사용자가 띄워둔
+            # 한/글이 워커의 COM 정리 시 같이 종료되는 부작용이 있었음.
+            com = win32.DispatchEx("HwpFrame.HwpObject")
             try:
                 com.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
             except Exception:
@@ -225,7 +229,9 @@ def worker_main(task_q, result_q, kill_hwp=True):
             hwp.SetMessageBoxMode(0x10000)
         except Exception:
             pass
-        hwp.Open(str(Path(filepath).absolute()))
+        # DispatchEx(late-binding)는 optional 인자 디폴트가 안 채워지므로 3-arg 명시.
+        # "forceopen:true" 로 손상/경고 파일도 강제로 열도록.
+        hwp.Open(str(Path(filepath).absolute()), "", "forceopen:true")
         text = ""
         try:
             raw = hwp.GetTextFile("TEXT", "")
