@@ -1,7 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(git add *)",
+      "Bash(git restore *)",
+      "Bash(git commit -m ' *)",
+      "Bash(python -m PyInstaller --version)",
+      "Bash(python -m pip install pyinstaller)",
+      "Bash(python -c \"import pymysql, dotenv; print\\('deps ok'\\)\")",
+      "Bash(python -m pip install pymysql python-dotenv pywin32)",
+      "Bash(python -m PyInstaller --onefile --name hwpmine --paths src --collect-submodules hwpmine src/hwpmine/__main__.py)",
+      "Bash(dist/hwpmine.exe q *)"
     ]
   }
 }
