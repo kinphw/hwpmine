@@ -33,8 +33,17 @@ BANNER = """\
 
 
 def run_step1() -> int:
-    from . import scanner
-    return scanner.run()
+    from . import scanner, config
+    from .drive_picker import pick_drives
+
+    selected = pick_drives(config.SCAN_DRIVES)
+    if selected is None:
+        print("  스캔 취소됨.")
+        return 0
+    if not selected:
+        print("  선택된 드라이브가 없습니다 — 스캔 취소.")
+        return 0
+    return scanner.run(drives=selected)
 
 
 def run_step2() -> int:
