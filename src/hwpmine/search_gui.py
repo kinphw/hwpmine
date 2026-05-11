@@ -18,7 +18,17 @@ try:
 except ImportError:
     raise SystemExit("pymysql 필요: pip install pymysql")
 
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    _DND_AVAILABLE = True
+except ImportError:
+    TkinterDnD = None  # type: ignore[assignment]
+    DND_FILES = "DND_Files"
+    _DND_AVAILABLE = False
+
 from . import config
+from .about import show_about
+from .icon import make_app_icon
 
 PAGE_SIZE = 200
 
@@ -152,6 +162,13 @@ class App:
         self.root.geometry("1100x750")
         self.root.minsize(800, 500)
 
+        # 아이콘은 PhotoImage GC 방지를 위해 인스턴스 속성으로 보관
+        try:
+            self._app_icon = make_app_icon(self.root)
+            self.root.iconphoto(True, self._app_icon)
+        except tk.TclError:
+            self._app_icon = None
+
         self.results: list = []
         self._full_data: dict = {}
         self._excluded_ids: set = set()
@@ -183,6 +200,9 @@ class App:
 
         self.btn = ttk.Button(row1, text="검색", command=self._on_search)
         self.btn.pack(side=tk.LEFT)
+
+        ttk.Button(row1, text="?", width=3,
+                   command=lambda: show_about(self.root)).pack(side=tk.RIGHT, padx=(8, 0))
 
         self.status = ttk.Label(row1, text="", foreground="gray")
         self.status.pack(side=tk.RIGHT)
@@ -252,6 +272,10 @@ class App:
 
         self.tree.tag_configure("excluded", foreground="#999999")
 
+        if _DND_AVAILABLE:
+            self.tree.drag_source_register(1, DND_FILES)
+            self.tree.dnd_bind("<<DragInitCmd>>", self._on_drag_init)
+
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
@@ -273,11 +297,15 @@ class App:
         bot = ttk.Frame(self.root, padding=10)
         bot.pack(fill=tk.X)
 
+        hint = "더블클릭: 파일 열기 | 드래그: 탐색기로 복사 | Del: 검색에서 제외"
+        if not _DND_AVAILABLE:
+            hint = "더블클릭: 파일 열기 | Del: 검색에서 제외 (드래그 기능: tkinterdnd2 미설치)"
         self.info_label = ttk.Label(
             bot,
-            text="더블클릭: 파일 열기 | Del / 제외 버튼: 선택 항목 검색에서 제외",
+            text=hint,
             foreground="gray", font=("맑은 고딕", 9),
         )
+        self._info_default = hint
         self.info_label.pack(side=tk.LEFT)
 
         self.open_btn = ttk.Button(bot, text="파일 열기",  command=self._on_open,   state=tk.DISABLED)
@@ -565,6 +593,40 @@ class App:
             except Exception as e:
                 messagebox.showerror("열기 실패", str(e))
 
+    # ── 드래그-앤-드롭 (탐색기로 파일 복사) ──────────────────────
+    def _on_drag_init(self, event):
+        _ = event  # DnDEvent — x/y 없음. 클릭 시점에 selection이 이미 갱신됨
+        self._hide_tooltip()
+
+        sel = list(self.tree.selection())
+        if not sel:
+            # 드물게 selection이 비어있다면 커서 위치(루트 좌표) 기준으로 식별
+            try:
+                ry = self.tree.winfo_pointery() - self.tree.winfo_rooty()
+                row = self.tree.identify_row(ry)
+                if row:
+                    sel = [row]
+                    self.tree.selection_set(row)
+            except Exception:
+                pass
+
+        paths, missing = [], []
+        for iid in sel:
+            full = self._full_data.get(iid)
+            if not full:
+                continue
+            _, directory, filename, _ = full
+            fp = os.path.join(directory, filename)
+            (paths if os.path.exists(fp) else missing).append(fp)
+
+        if missing:
+            self._log(f"[드래그] 누락된 파일 {len(missing)}건 제외")
+        if not paths:
+            return "break"
+
+        self._log(f"[드래그] {len(paths)}건을 탐색기로 전달")
+        return ("copy", DND_FILES, tuple(paths))
+
     # ── 제외 / 완전 삭제 ─────────────────────────────────────────
     def _on_delete(self):
         sel = self.tree.selection()
@@ -667,14 +729,17 @@ class App:
         else:
             self._log(f"[제외 완료] {affected}건 검색에서 제외됨 (레코드 유지)")
         self.del_btn.configure(state=tk.DISABLED, text="제외 (Del)")
-        self.info_label.configure(
-            text="더블클릭: 파일 열기 | Del / 제외 버튼: 선택 항목 검색에서 제외",
-            foreground="gray",
-        )
+        self.info_label.configure(text=self._info_default, foreground="gray")
 
 
 def main():
-    root = tk.Tk()
+    if _DND_AVAILABLE:
+        try:
+            root = TkinterDnD.Tk()
+        except Exception:
+            root = tk.Tk()
+    else:
+        root = tk.Tk()
     style = ttk.Style()
     style.configure("Treeview",         font=("맑은 고딕", 9), rowheight=24)
     style.configure("Treeview.Heading", font=("맑은 고딕", 9, "bold"))

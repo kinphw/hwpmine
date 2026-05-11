@@ -19,6 +19,8 @@ from queue import Empty
 
 from .inserter import worker_main
 from . import config
+from .about import show_about
+from .icon import make_app_icon
 
 TARGET_EXT = {".hwp", ".hwpx"}
 SEPARATOR  = "=" * 80
@@ -61,6 +63,13 @@ class ExtractorApp:
         self.root.minsize(600, 480)
         self.root.resizable(True, True)
 
+        # 아이콘은 PhotoImage GC 방지를 위해 인스턴스 속성으로 보관
+        try:
+            self._app_icon = make_app_icon(self.root)
+            self.root.iconphoto(True, self._app_icon)
+        except tk.TclError:
+            self._app_icon = None
+
         self._running   = False
         self._stop_flag = False
 
@@ -86,6 +95,9 @@ class ExtractorApp:
             variable=self.mode_var, value="file",
             command=self._on_mode_change,
         ).pack(side=tk.LEFT, padx=(20, 0))
+
+        ttk.Button(mode_frame, text="?", width=3,
+                   command=lambda: show_about(self.root)).pack(side=tk.RIGHT)
 
         # ── 입력 경로 ─────────────────────────────────────────
         src_frame = ttk.LabelFrame(self.root, text="입력 경로", padding=8)
