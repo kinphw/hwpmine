@@ -14,10 +14,10 @@ HWP 와 동일한 `config.DB_TABLE` 에 적재한다.
   진짜 파싱 실패('error') 와 명시적으로 구분된다.
 
 단독 실행:
-  python -m hwpmine.pdf_inserter
-  python -m hwpmine.pdf_inserter --csv my_pdf_list.csv
-  python -m hwpmine.pdf_inserter --start 0 --end 100
-  python -m hwpmine.pdf_inserter --workers 4
+  python -m docmine.pdf_inserter
+  python -m docmine.pdf_inserter --csv my_pdf_list.csv
+  python -m docmine.pdf_inserter --start 0 --end 100
+  python -m docmine.pdf_inserter --workers 4
 """
 from __future__ import annotations
 

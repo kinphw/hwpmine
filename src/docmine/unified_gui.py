@@ -1,5 +1,5 @@
 """
-HWP Mine — 통합 GUI 런처
+Doc Mine — 통합 GUI 런처
 ==========================
 4단계(스캔 / 적재 / 검색 / 추출) 를 단일 창의 탭으로 통합.
 
@@ -9,9 +9,9 @@ HWP Mine — 통합 GUI 런처
   Notebook 탭의 ttk.Frame 에 임베드.
 
 단독 실행:
-    python -m hwpmine.unified_gui
+    python -m docmine.unified_gui
 또는
-    hwpmine g
+    docmine g
 """
 from __future__ import annotations
 

@@ -14,4 +14,5 @@ dist/
 # pyinstaller
 *.spec
 release/
+docmine_v*.zip
 hwpmine_v*.zip

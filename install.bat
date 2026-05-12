@@ -3,21 +3,21 @@ chcp 65001 >nul
 setlocal EnableExtensions
 
 REM ─────────────────────────────────────────────────────────────
-REM  HWP Mine — 설치 스크립트 (단일 실행파일 버전)
+REM  Doc Mine — 설치 스크립트 (단일 실행파일 버전)
 REM
-REM  같은 폴더에 있는 hwpmine.exe 와 .env.example 을
-REM  %LOCALAPPDATA%\Programs\hwpmine\ 에 복사하고
+REM  같은 폴더에 있는 docmine.exe 와 .env.example 을
+REM  %LOCALAPPDATA%\Programs\docmine\ 에 복사하고
 REM  사용자 PATH 에 등록합니다.
 REM ─────────────────────────────────────────────────────────────
 
 set "HERE=%~dp0"
-set "EXE=%HERE%hwpmine.exe"
+set "EXE=%HERE%docmine.exe"
 set "ENV_EXAMPLE=%HERE%.env.example"
-set "TARGET=%LOCALAPPDATA%\Programs\hwpmine"
+set "TARGET=%LOCALAPPDATA%\Programs\docmine"
 
 if not exist "%EXE%" (
-    echo [오류] 같은 폴더에서 hwpmine.exe 를 찾을 수 없습니다.
-    echo        install.bat 과 같은 위치에 hwpmine.exe 를 두고 다시 실행하세요.
+    echo [오류] 같은 폴더에서 docmine.exe 를 찾을 수 없습니다.
+    echo        install.bat 과 같은 위치에 docmine.exe 를 두고 다시 실행하세요.
     pause
     exit /b 1
 )
@@ -33,9 +33,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-copy /Y "%EXE%" "%TARGET%\hwpmine.exe" >nul
+copy /Y "%EXE%" "%TARGET%\docmine.exe" >nul
 if errorlevel 1 (
-    echo [오류] hwpmine.exe 복사에 실패했습니다. 다른 hwpmine.exe 가 실행 중인지 확인하세요.
+    echo [오류] docmine.exe 복사에 실패했습니다. 다른 docmine.exe 가 실행 중인지 확인하세요.
     pause
     exit /b 1
 )
@@ -72,13 +72,13 @@ echo ==============================================================
 echo   설치 완료.
 echo.
 echo   다음 단계:
-echo     1) 사용자 .env 위치 — 권장: %APPDATA%\hwpmine\.env
-echo        (또는 hwpmine 을 실행할 작업 폴더의 .env)
+echo     1) 사용자 .env 위치 — 권장: %APPDATA%\docmine\.env
+echo        (또는 docmine 을 실행할 작업 폴더의 .env)
 echo        설치 폴더의 .env.example 을 복사해 값을 채우세요.
 echo.
 echo     2) 새 콘솔(또는 탐색기)을 열고 실행:
-echo          hwpmine          ^(대화형 메뉴^)
-echo          hwpmine 3        ^(검색 GUI 바로 실행^)
+echo          docmine          ^(대화형 메뉴^)
+echo          docmine 3        ^(검색 GUI 바로 실행^)
 echo ==============================================================
 pause
 endlocal

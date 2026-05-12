@@ -1,10 +1,13 @@
 """공통 설정 — .env에서 값을 읽어 전체 모듈에 제공.
 
 .env 탐색 우선순위
-  1. 환경변수 HWPMINE_ENV 가 지정한 경로
+  1. 환경변수 DOCMINE_ENV (또는 구 HWPMINE_ENV) 가 지정한 경로
   2. 현재 작업 디렉터리의 ./.env
-  3. %APPDATA%\\hwpmine\\.env   (Windows 사용자 설정)
-  4. ~/.config/hwpmine/.env     (기타 플랫폼)
+  3. %APPDATA%\\docmine\\.env   (Windows 사용자 설정 — 구 hwpmine 도 폴백)
+  4. ~/.config/docmine/.env     (기타 플랫폼 — 구 hwpmine 도 폴백)
+
+구 hwpmine 경로/환경변수는 이번 버전(0.3.6)까지만 호환으로 인식하며,
+다음 마이너 버전에서 제거 예정.
 """
 
 import os
@@ -19,7 +22,7 @@ except ImportError:
 def _candidate_env_paths() -> list[Path]:
     paths: list[Path] = []
 
-    override = os.environ.get("HWPMINE_ENV")
+    override = os.environ.get("DOCMINE_ENV") or os.environ.get("HWPMINE_ENV")
     if override:
         paths.append(Path(override).expanduser())
 
@@ -28,11 +31,14 @@ def _candidate_env_paths() -> list[Path]:
     if os.name == "nt":
         appdata = os.environ.get("APPDATA")
         if appdata:
+            paths.append(Path(appdata) / "docmine" / ".env")
+            # 구 hwpmine 경로 호환 폴백 — 한 마이너 버전 후 제거 예정.
             paths.append(Path(appdata) / "hwpmine" / ".env")
     else:
         xdg = os.environ.get("XDG_CONFIG_HOME")
         base = Path(xdg) if xdg else Path.home() / ".config"
-        paths.append(base / "hwpmine" / ".env")
+        paths.append(base / "docmine" / ".env")
+        paths.append(base / "hwpmine" / ".env")  # 구 경로 호환
 
     return paths
 

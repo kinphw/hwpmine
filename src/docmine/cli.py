@@ -1,9 +1,9 @@
 """
-HWP Mine — 통합 런처
+Doc Mine — 통합 런처
 =====================
 스캔·적재는 HWP/PDF 가 별도 CSV·별도 파서로 분리, 검색은 같은 테이블에서
 통합 수행. CLI 단축 명령은 HWP 파이프라인만 노출하며, PDF 적재는
-`python -m hwpmine.pdf_inserter` 또는 통합 GUI(`g`) 의 PDF 탭에서.
+`python -m docmine.pdf_inserter` 또는 통합 GUI(`g`) 의 PDF 탭에서.
 
 파이프라인:
   1  스캔   : 드라이브 순회 → CSV 추출   (scanner)        — HWP 전용
@@ -12,11 +12,11 @@ HWP Mine — 통합 런처
   4  추출   : HWP/HWPX → TXT 변환기     (extractor_gui)  — HWP 전용
 
 실행 예:
-  hwpmine            # 대화형 메뉴
-  hwpmine 1          # Step 1만
-  hwpmine all        # 1 → 2 → 3 순차 실행
+  docmine            # 대화형 메뉴
+  docmine 1          # Step 1만
+  docmine all        # 1 → 2 → 3 순차 실행
 또는 모듈 호출:
-  python -m hwpmine
+  python -m docmine
 """
 
 import sys
@@ -25,7 +25,7 @@ import multiprocessing as mp
 
 BANNER = """\
 ╔══════════════════════════════════════════╗
-║         HWP Mine — 통합 런처             ║
+║         Doc Mine — 통합 런처             ║
 ╠══════════════════════════════════════════╣
 ║  g  통합 GUI (HWP/PDF 스캔·적재 탭 분리) ║
 ║  1  스캔   HWP 파일 목록 → CSV           ║
@@ -36,7 +36,7 @@ BANNER = """\
 ║  q  종료                                 ║
 ╚══════════════════════════════════════════╝
   ※ PDF 적재는 통합 GUI(g) 의 PDF 탭 또는
-    `python -m hwpmine.pdf_inserter` 사용."""
+    `python -m docmine.pdf_inserter` 사용."""
 
 
 def run_step1() -> int:
