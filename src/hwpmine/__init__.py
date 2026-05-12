@@ -1,6 +1,6 @@
 """HWP Mine — HWP/HWPX 스캔·파싱·적재·검색 파이프라인."""
 
-__version__ = "0.3.5"
+__version__ = "0.3.6"
 __author__ = "kinphw"
 __app_name__ = "HWP Mine"
 __tagline__ = "www.github.com/kinphw/hwpmine"
