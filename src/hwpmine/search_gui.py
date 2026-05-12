@@ -1,7 +1,8 @@
 """
-Step 3 — HWP 문서 검색 GUI
-===========================
-MariaDB에 적재된 HWP 문서를 키워드로 검색하고 클릭하면 파일을 엽니다.
+Step 3 — 문서 검색 GUI
+=======================
+MariaDB에 적재된 문서(HWP·PDF 통합)를 키워드로 검색하고 클릭하면 파일을 엽니다.
+HWP 와 PDF 는 적재 단계만 분리돼 있고 검색은 단일 테이블에서 통합 수행.
 
 단독 실행:
   python search_gui.py
@@ -156,18 +157,22 @@ def delete_rows(ids: list) -> int:
 # ═══════════════════════════════════════════════════════════════
 
 class App:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("HWP 문서 검색기")
-        self.root.geometry("1100x750")
-        self.root.minsize(800, 500)
+    def __init__(self, master: tk.Misc):
+        # master 가 Tk/Toplevel 이면 단독 창 모드, 그 외(Notebook 탭의 Frame 등)는 임베드 모드.
+        self.root = master
+        self._standalone = isinstance(master, (tk.Tk, tk.Toplevel))
 
-        # 아이콘은 PhotoImage GC 방지를 위해 인스턴스 속성으로 보관
-        try:
-            self._app_icon = make_app_icon(self.root)
-            self.root.iconphoto(True, self._app_icon)
-        except tk.TclError:
-            self._app_icon = None
+        if self._standalone:
+            master.title("문서 검색기")
+            master.geometry("1100x750")
+            master.minsize(800, 500)
+
+            # 아이콘은 PhotoImage GC 방지를 위해 인스턴스 속성으로 보관
+            try:
+                self._app_icon = make_app_icon(master)
+                master.iconphoto(True, self._app_icon)
+            except tk.TclError:
+                self._app_icon = None
 
         self.results: list = []
         self._full_data: dict = {}

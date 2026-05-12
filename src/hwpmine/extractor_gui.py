@@ -56,19 +56,23 @@ def _spawn_worker(task_q, result_q):
 # ═══════════════════════════════════════════════════════════════
 
 class ExtractorApp:
-    def __init__(self, root: tk.Tk):
-        self.root  = root
-        self.root.title("HWP / HWPX → TXT 변환기")
-        self.root.geometry("720x560")
-        self.root.minsize(600, 480)
-        self.root.resizable(True, True)
+    def __init__(self, master: tk.Misc):
+        # master 가 Tk/Toplevel 이면 단독 창 모드, 그 외(Notebook 탭의 Frame 등)는 임베드 모드.
+        self.root = master
+        self._standalone = isinstance(master, (tk.Tk, tk.Toplevel))
 
-        # 아이콘은 PhotoImage GC 방지를 위해 인스턴스 속성으로 보관
-        try:
-            self._app_icon = make_app_icon(self.root)
-            self.root.iconphoto(True, self._app_icon)
-        except tk.TclError:
-            self._app_icon = None
+        if self._standalone:
+            master.title("HWP / HWPX → TXT 변환기")
+            master.geometry("720x560")
+            master.minsize(600, 480)
+            master.resizable(True, True)
+
+            # 아이콘은 PhotoImage GC 방지를 위해 인스턴스 속성으로 보관
+            try:
+                self._app_icon = make_app_icon(master)
+                master.iconphoto(True, self._app_icon)
+            except tk.TclError:
+                self._app_icon = None
 
         self._running   = False
         self._stop_flag = False

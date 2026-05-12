@@ -1,11 +1,15 @@
 """
 HWP Mine — 통합 런처
 =====================
+스캔·적재는 HWP/PDF 가 별도 CSV·별도 파서로 분리, 검색은 같은 테이블에서
+통합 수행. CLI 단축 명령은 HWP 파이프라인만 노출하며, PDF 적재는
+`python -m hwpmine.pdf_inserter` 또는 통합 GUI(`g`) 의 PDF 탭에서.
+
 파이프라인:
-  1  스캔   : 드라이브 순회 → CSV 추출   (scanner)
-  2  적재   : CSV → MariaDB 파싱 적재    (inserter)
-  3  검색   : DB 기반 GUI 검색기         (search_gui)
-  4  추출   : HWP/HWPX → TXT 변환기     (extractor_gui)
+  1  스캔   : 드라이브 순회 → CSV 추출   (scanner)        — HWP 전용
+  2  적재   : CSV → MariaDB 파싱 적재    (inserter)       — HWP 전용
+  3  검색   : DB 기반 GUI 검색기         (search_gui)     — HWP+PDF 통합
+  4  추출   : HWP/HWPX → TXT 변환기     (extractor_gui)  — HWP 전용
 
 실행 예:
   hwpmine            # 대화형 메뉴
@@ -23,13 +27,16 @@ BANNER = """\
 ╔══════════════════════════════════════════╗
 ║         HWP Mine — 통합 런처             ║
 ╠══════════════════════════════════════════╣
+║  g  통합 GUI (HWP/PDF 스캔·적재 탭 분리) ║
 ║  1  스캔   HWP 파일 목록 → CSV           ║
-║  2  적재   CSV → MariaDB 파싱 적재       ║
-║  3  검색   GUI 검색기 실행               ║
+║  2  적재   HWP CSV → MariaDB 적재        ║
+║  3  검색   GUI 검색기 (HWP+PDF 통합)     ║
 ║  4  추출   HWP/HWPX → TXT 변환기        ║
-║  all       1 → 2 → 3 순차 실행           ║
+║  all       1 → 2 → 3 순차 실행 (HWP)     ║
 ║  q  종료                                 ║
-╚══════════════════════════════════════════╝"""
+╚══════════════════════════════════════════╝
+  ※ PDF 적재는 통합 GUI(g) 의 PDF 탭 또는
+    `python -m hwpmine.pdf_inserter` 사용."""
 
 
 def run_step1() -> int:
@@ -68,8 +75,19 @@ def run_step4() -> int:
     return 0
 
 
+def run_unified_gui() -> int:
+    from . import unified_gui
+    unified_gui.main()
+    return 0
+
+
 def _step_from_arg(arg: str) -> int | None:
-    mapping = {"1": 1, "2": 2, "3": 3, "4": 4, "all": 0, "q": -1}
+    # 5 = 통합 GUI (g/gui)
+    mapping = {
+        "1": 1, "2": 2, "3": 3, "4": 4,
+        "all": 0, "q": -1,
+        "g": 5, "gui": 5,
+    }
     return mapping.get(arg.lower())
 
 
@@ -84,7 +102,7 @@ def main() -> int:
         choice = sys.argv[1]
     else:
         print(BANNER)
-        choice = input("\n  실행할 단계를 입력하세요 (1/2/3/all/q): ").strip()
+        choice = input("\n  실행할 단계를 입력하세요 (g/1/2/3/4/all/q): ").strip()
 
     step = _step_from_arg(choice)
 
@@ -105,6 +123,9 @@ def main() -> int:
 
     if step == 4:
         return run_step4()
+
+    if step == 5:
+        return run_unified_gui()
 
     if step == 0:   # all
         rc = run_step1()

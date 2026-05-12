@@ -54,12 +54,19 @@ CREATE TABLE IF NOT EXISTS `{config.DB_TABLE}` (
     file_size    BIGINT         DEFAULT 0,
     file_mtime   VARCHAR(30),
     body_text    LONGTEXT,
-    parse_status ENUM('success','error','skip') DEFAULT 'success',
+    parse_status ENUM('success','error','skip','empty') DEFAULT 'success',
     error_msg    VARCHAR(1000),
     parsed_at    DATETIME       DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY   uq_file (directory(500), filename(255))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
+
+# 기존 환경(이전 버전 ENUM) 보강용 — 스캔본 PDF 를 'empty' 로 표기 가능하도록.
+ALTER_STATUS_ENUM = (
+    f"ALTER TABLE `{config.DB_TABLE}` "
+    "MODIFY COLUMN parse_status "
+    "ENUM('success','error','skip','empty') DEFAULT 'success'"
+)
 
 INSERT_SQL = f"""
 INSERT INTO `{config.DB_TABLE}`
@@ -82,6 +89,12 @@ def create_db():
         cur.execute(DDL_DB)
         conn.select_db(config.DB_NAME)
         cur.execute(DDL_TABLE)
+        # 이전 스키마에서 만든 테이블이라면 ENUM 에 'empty' 가 없을 수 있어
+        # 보강. 이미 'empty' 가 포함돼 있으면 MariaDB 는 메타데이터-only 로 처리.
+        try:
+            cur.execute(ALTER_STATUS_ENUM)
+        except Exception:
+            pass
     conn.commit()
     conn.close()
     print(f"  v DB [{config.DB_NAME}] / 테이블 [{config.DB_TABLE}] 준비 완료")
@@ -95,7 +108,7 @@ class PB:
     def __init__(self, total, offset=0):
         self.total = total
         self.offset = offset
-        self.cur = self.ok = self.err = self.crash = self.skip = 0
+        self.cur = self.ok = self.err = self.crash = self.skip = self.empty = 0
         self.t0 = time.time()
 
     def tick(self, status="success"):
@@ -104,6 +117,9 @@ class PB:
             self.ok += 1
         elif status == "skip":
             self.skip += 1
+        elif status == "empty":
+            # 본문 텍스트가 비어 있는 PDF (스캔본/이미지) — 에러와 분리해 표기.
+            self.empty += 1
         elif status == "crash":
             self.crash += 1
         else:
@@ -115,22 +131,24 @@ class PB:
         w   = 30
         bar = "#" * int(w * pct) + "." * (w - int(w * pct))
         idx = self.offset + self.cur
+        empty_str = f" empty:{self.empty}" if self.empty else ""
         skip_str = f" skip:{self.skip}" if self.skip else ""
         crash_str = f" crash:{self.crash}" if self.crash else ""
         print(
             f"\r  [{bar}] {idx}/{self.offset + self.total}"
-            f"  ok:{self.ok} err:{self.err}{skip_str}{crash_str}"
+            f"  ok:{self.ok} err:{self.err}{empty_str}{skip_str}{crash_str}"
             f"  ETA {int(eta//60)}:{int(eta%60):02d}  ",
             end="", flush=True,
         )
 
     def done(self):
         el = time.time() - self.t0
+        empty_str = f" empty:{self.empty}" if self.empty else ""
         skip_str = f" skip:{self.skip}" if self.skip else ""
         crash_str = f" crash:{self.crash}" if self.crash else ""
         print(
             f"\n  완료: {int(el//60)}분{int(el%60)}초"
-            f"  ok:{self.ok} err:{self.err}{skip_str}{crash_str}"
+            f"  ok:{self.ok} err:{self.err}{empty_str}{skip_str}{crash_str}"
         )
 
 
@@ -330,6 +348,9 @@ def _load_existing_keys(conn, rows, chunk_size: int = 500):
     return existing
 
 
+HWP_EXTS = {".hwp", ".hwpx"}
+
+
 def run(csv_path: str, start: int = 0, end=None) -> int:
     all_rows = []
     with open(csv_path, encoding="utf-8-sig") as f:
@@ -337,9 +358,11 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
             all_rows.append(r)
 
     total_all = len(all_rows)
-    rows = all_rows[start:end]
-    print(f"  CSV 전체: {total_all:,}건")
-    print(f"  처리 범위: [{start}:{end if end else total_all}] -> {len(rows):,}건")
+    # HWP 워커는 .hwp/.hwpx 만 처리 — CSV 에 .pdf 등이 섞여 있어도 무시.
+    hwp_rows = [r for r in all_rows if r.get("extension", "").lower() in HWP_EXTS]
+    rows = hwp_rows[start:end]
+    print(f"  CSV 전체: {total_all:,}건 (그 중 HWP/HWPX {len(hwp_rows):,}건)")
+    print(f"  처리 범위: [{start}:{end if end else len(hwp_rows)}] -> {len(rows):,}건")
 
     if not rows:
         print("  처리할 파일이 없습니다.")

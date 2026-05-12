@@ -44,8 +44,8 @@ _kernel32.GetVolumeInformationW.argtypes = [
 ]
 
 
-def _list_drives() -> list[tuple[str, str, str]]:
-    """현재 마운트된 드라이브 목록.
+def list_drives() -> list[tuple[str, str, str]]:
+    """현재 마운트된 드라이브 목록 (외부 공개 API).
 
     반환: [(root, label, drive_type_name)] — 예) ("C:\\", "Windows", "고정")
     """
@@ -72,17 +72,28 @@ def _list_drives() -> list[tuple[str, str, str]]:
     return drives
 
 
+# 하위 호환 별칭 — 다른 곳에서 _list_drives 를 import 했다면.
+_list_drives = list_drives
+
+
 # ── 다이얼로그 ────────────────────────────────────────────────
-def pick_drives(defaults: list[str]) -> Optional[list[str]]:
+def pick_drives(defaults: list[str], parent: Optional[tk.Misc] = None) -> Optional[list[str]]:
     """체크박스로 스캔 대상 드라이브를 선택받고, 확정된 리스트 또는 None 반환.
 
     Args:
         defaults: 초기 체크 상태로 표시할 드라이브 루트 목록 (예: ["C:\\", "D:\\"]).
+        parent: 부모 윈도우. 주어지면 Toplevel(모달) 로 띄우고, None 이면
+                새 tk.Tk() 를 만들어 단독 다이얼로그로 동작 (콘솔 호출용).
     """
-    drives = _list_drives()
+    drives = list_drives()
     default_set = {d.upper().rstrip("\\") + "\\" for d in defaults}
 
-    root = tk.Tk()
+    embedded = parent is not None
+    if embedded:
+        root = tk.Toplevel(parent)
+        root.transient(parent.winfo_toplevel())
+    else:
+        root = tk.Tk()
     root.title("스캔할 드라이브 선택")
     root.resizable(False, False)
 
@@ -155,5 +166,10 @@ def pick_drives(defaults: list[str]) -> Optional[list[str]]:
     ww, wh = root.winfo_reqwidth(), root.winfo_reqheight()
     root.geometry(f"+{(sw - ww) // 2}+{(sh - wh) // 3}")
 
-    root.mainloop()
+    if embedded:
+        # 모달 다이얼로그처럼 동작 — 부모 mainloop 안에서 wait_window 로 블록.
+        root.grab_set()
+        root.wait_window()
+    else:
+        root.mainloop()
     return result["value"]

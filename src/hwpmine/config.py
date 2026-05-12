@@ -53,18 +53,38 @@ DB_PORT     = int(os.getenv("DB_PORT", "3306"))
 DB_USER     = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_NAME     = os.getenv("DB_NAME", "hwp_documents")
+# 적재 테이블은 HWP/PDF 가 공용 — 두 파이프라인 모두 같은 테이블에 행을 쌓고,
+# 검색은 extension 컬럼으로 구분하거나 통합 검색한다.
 DB_TABLE    = os.getenv("DB_TABLE", "documents")
 
 # ── 스캔 ──────────────────────────────────────────────────────
 SCAN_DRIVES = [d.strip() for d in os.getenv("SCAN_DRIVES", r"C:\,D:\\").split(",") if d.strip()]
 
 # ── CSV ───────────────────────────────────────────────────────
-CSV_FILE = os.getenv("CSV_FILE", "hwp_file_list.csv")
+# 스캔 단계는 HWP/PDF 가 별도 CSV — 각자의 파서로 적재하기 위함.
+CSV_FILE     = os.getenv("CSV_FILE",     "hwp_file_list.csv")
+PDF_CSV_FILE = os.getenv("PDF_CSV_FILE", "pdf_file_list.csv")
 
 # ── 적재 튜닝 ─────────────────────────────────────────────────
 COMMIT_EVERY  = int(os.getenv("COMMIT_EVERY",  "50"))
 COM_RESTART   = int(os.getenv("COM_RESTART",   "500"))
 PARSE_TIMEOUT = int(os.getenv("PARSE_TIMEOUT", "60"))
+
+# PDF 본문 추출은 CPU-바운드 — 멀티프로세스로 병렬 처리.
+# 기본은 실행 머신의 논리 CPU 수에 맞춰 동적으로 결정.
+# 환경변수 PDF_WORKERS / CLI --workers 로 override 가능 (1 이상 정수).
+def _detect_pdf_workers() -> int:
+    env = os.getenv("PDF_WORKERS", "0").strip()
+    try:
+        n = int(env)
+    except ValueError:
+        n = 0
+    if n > 0:
+        return n
+    return max(1, os.cpu_count() or 1)
+
+
+PDF_WORKERS = _detect_pdf_workers()
 
 
 def get_db_config(use_db: bool = True) -> dict:
