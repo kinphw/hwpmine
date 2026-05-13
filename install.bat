@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal EnableExtensions
 
 REM ─────────────────────────────────────────────────────────────
-REM  Doc Mine — 설치 스크립트 (단일 실행파일 버전)
+REM  DocMine — 설치 스크립트 (단일 실행파일 버전)
 REM
 REM  같은 폴더에 있는 docmine.exe 와 .env.example 을
 REM  %LOCALAPPDATA%\Programs\docmine\ 에 복사하고

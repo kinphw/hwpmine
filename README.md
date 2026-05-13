@@ -1,4 +1,4 @@
-# Doc Mine
+# DocMine
 
 HWP/HWPX/PDF 문서를 드라이브 전체에서 찾아 본문을 파싱한 뒤 MariaDB에 적재하고, GUI로 키워드 검색하는 파이프라인 도구입니다.
 

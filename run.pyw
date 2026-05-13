@@ -1,5 +1,5 @@
 """
-Doc Mine — 통합 GUI 진입점 (.pyw — 콘솔 창 없이 곧장 윈도우만 띄움)
+DocMine — 통합 GUI 진입점 (.pyw — 콘솔 창 없이 곧장 윈도우만 띄움)
 
 Windows 의 .pyw 확장자는 기본적으로 pythonw.exe 에 연결되어 콘솔 창
 없이 실행된다. 더블클릭 또는 `python run.pyw` 양쪽 모두 동일하게
