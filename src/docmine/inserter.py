@@ -23,6 +23,7 @@ import threading
 import multiprocessing as mp
 from pathlib import Path
 from queue import Empty
+from typing import Optional
 
 from .hwp_parser import configure_logging
 
@@ -98,6 +99,56 @@ def create_db():
     conn.commit()
     conn.close()
     print(f"  v DB [{config.DB_NAME}] / 테이블 [{config.DB_TABLE}] 준비 완료")
+
+
+# ================================================================
+# Windows Job Object — 부모 프로세스가 어떻게 죽든 자식까지 일괄 살처분.
+# ================================================================
+#
+# mp.Pool/mp.Process 워커는 Python 의 daemon=True 라도 실제 종료는 부모의
+# atexit 훅이 terminate() 를 호출하는 방식이라, GUI 강제종료/X클릭/
+# Task Manager 같은 비정상 종료에서는 워커가 고아화되어 CPU·메모리를
+# 계속 잡는다.
+#
+# Job Object 에 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE 를 걸어두면 부모가
+# 사라지는 순간 커널이 그 job 의 모든 프로세스를 즉시 종료한다. spawn 으로
+# 만들어진 워커들은 별다른 옵션 없이 부모의 job 을 상속한다.
+#
+# HWP 워커가 COM 으로 띄우는 Hwp.exe 는 DCOM 활성화 경로에 따라 job 을
+# 벗어날 수 있으므로 _kill_hwp() 와 시작 시점 청소가 보조 안전망이다.
+_job_handle = None  # GC 되면 효과가 사라지므로 모듈 변수로 보관.
+
+
+def _setup_kill_on_close_job() -> None:
+    """현재 프로세스를 KILL_ON_JOB_CLOSE Job 에 할당. 이미 다른 job 에 속해
+    있어 실패하면(예: 디버거/샌드박스 환경) 경고만 찍고 진행."""
+    global _job_handle
+    if os.name != "nt" or _job_handle is not None:
+        return
+    try:
+        import win32api
+        import win32con
+        import win32job
+    except ImportError:
+        return
+    try:
+        job = win32job.CreateJobObject(None, "")
+        info = win32job.QueryInformationJobObject(
+            job, win32job.JobObjectExtendedLimitInformation
+        )
+        info["BasicLimitInformation"]["LimitFlags"] |= (
+            win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        win32job.SetInformationJobObject(
+            job, win32job.JobObjectExtendedLimitInformation, info
+        )
+        h = win32api.OpenProcess(
+            win32con.PROCESS_ALL_ACCESS, False, win32api.GetCurrentProcessId()
+        )
+        win32job.AssignProcessToJobObject(job, h)
+        _job_handle = job
+    except Exception as e:
+        print(f"  ⚠ Job Object 설정 실패(무시): {e}")
 
 
 # ================================================================
@@ -351,7 +402,11 @@ def _load_existing_keys(conn, rows, chunk_size: int = 500):
 HWP_EXTS = {".hwp", ".hwpx"}
 
 
-def run(csv_path: str, start: int = 0, end=None) -> int:
+def run(csv_path: str, start: int = 0, end=None,
+        stop_event: Optional[threading.Event] = None) -> int:
+    # 부모가 어떻게 죽든 워커도 같이 죽도록.
+    _setup_kill_on_close_job()
+
     all_rows = []
     with open(csv_path, encoding="utf-8-sig") as f:
         for r in csv.DictReader(f):
@@ -377,6 +432,11 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
     err_f = open(ERROR_LOG, "a", newline="", encoding="utf-8-sig")
     err_w = csv.writer(err_f)
 
+    # 이전 실행이 강제 종료돼 남아있을 수 있는 Hwp.exe / HwpFrame.exe
+    # 고아 프로세스를 시작 시점에 청소(방어적). 이게 없으면 누적된
+    # 좀비들이 메모리·핸들을 잡고 있어 다음 실행이 점점 느려진다.
+    _kill_hwp()
+
     task_q   = mp.Queue()
     result_q = mp.Queue()
     worker   = _spawn_worker(task_q, result_q)
@@ -387,6 +447,9 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
 
     try:
         for i, row in enumerate(rows):
+            if stop_event is not None and stop_event.is_set():
+                print("\n\n  중지 요청됨 — 워커 정리 중…")
+                break
             d, fn = row["directory"], row["filename"]
             ext   = row.get("extension", "").lower()
             fp    = os.path.join(d, fn)

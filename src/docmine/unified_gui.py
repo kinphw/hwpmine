@@ -1,5 +1,5 @@
 """
-Doc Mine — 통합 GUI 런처
+DocMine — 통합 GUI 런처
 ==========================
 4단계(스캔 / 적재 / 검색 / 추출) 를 단일 창의 탭으로 통합.
 
@@ -331,6 +331,7 @@ class InsertTab:
     def __init__(self, parent: tk.Misc):
         self.frame = ttk.Frame(parent, padding=8)
         self._busy = False
+        self.stop_event = threading.Event()
         self._build()
 
     def _build(self):
@@ -366,6 +367,9 @@ class InsertTab:
         btns.pack(fill=tk.X, pady=(8, 0))
         self.start_btn = ttk.Button(btns, text="HWP 적재 시작", command=self._on_start)
         self.start_btn.pack(side=tk.LEFT)
+        self.stop_btn = ttk.Button(btns, text="중지", command=self._on_stop,
+                                   state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         # ── 로그 ────────────────────────────────────────────────
         self.log = _LogPane(self.frame)
@@ -406,7 +410,9 @@ class InsertTab:
             return
 
         self._busy = True
+        self.stop_event.clear()
         self.start_btn.configure(state=tk.DISABLED, text="HWP 적재 중…")
+        self.stop_btn.configure(state=tk.NORMAL, text="중지")
         self.log.clear()
 
         writer = _QueueWriter(self.log.queue, mirror=sys.__stdout__)
@@ -417,7 +423,8 @@ class InsertTab:
                 from .hwp_parser import configure_logging
                 configure_logging(verbose=False)
                 with _redirect_stdio(writer):
-                    inserter.run(csv_path, start=start, end=end)
+                    inserter.run(csv_path, start=start, end=end,
+                                 stop_event=self.stop_event)
             except Exception as e:
                 writer.write(f"\n[오류] {type(e).__name__}: {e}\n")
             finally:
@@ -426,9 +433,16 @@ class InsertTab:
 
         threading.Thread(target=_runner, daemon=True).start()
 
+    def _on_stop(self):
+        if not self._busy:
+            return
+        self.stop_event.set()
+        self.stop_btn.configure(state=tk.DISABLED, text="중지 중…")
+
     def _on_done(self):
         self._busy = False
         self.start_btn.configure(state=tk.NORMAL, text="HWP 적재 시작")
+        self.stop_btn.configure(state=tk.DISABLED, text="중지")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -441,11 +455,16 @@ class PdfInsertTab:
     HWP 와 완전히 분리된 PDF 전용 테이블(`config.PDF_DB_TABLE`) 로 적재한다.
     PyMuPDF 기반이라 스캔본/이미지 PDF 는 빈 본문이 나올 수 있으며(OCR 미적용),
     그런 경우 'error' 상태로 기록된다.
+
+    '중지' 버튼은 stop_event 로 메인 루프에 신호를 보내고, with mp.Pool 의
+    __exit__ 가 워커들을 terminate. 강제종료 상황은 pdf_inserter 의
+    Job Object 가 커널 차원에서 회수.
     """
 
     def __init__(self, parent: tk.Misc):
         self.frame = ttk.Frame(parent, padding=8)
         self._busy = False
+        self.stop_event = threading.Event()
         self._build()
 
     def _build(self):
@@ -481,6 +500,9 @@ class PdfInsertTab:
         btns.pack(fill=tk.X, pady=(8, 0))
         self.start_btn = ttk.Button(btns, text="PDF 적재 시작", command=self._on_start)
         self.start_btn.pack(side=tk.LEFT)
+        self.stop_btn = ttk.Button(btns, text="중지", command=self._on_stop,
+                                   state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=(6, 0))
 
         # ── 로그 ────────────────────────────────────────────────
         self.log = _LogPane(self.frame)
@@ -521,7 +543,9 @@ class PdfInsertTab:
             return
 
         self._busy = True
+        self.stop_event.clear()
         self.start_btn.configure(state=tk.DISABLED, text="PDF 적재 중…")
+        self.stop_btn.configure(state=tk.NORMAL, text="중지")
         self.log.clear()
 
         writer = _QueueWriter(self.log.queue, mirror=sys.__stdout__)
@@ -530,7 +554,8 @@ class PdfInsertTab:
             try:
                 from . import pdf_inserter
                 with _redirect_stdio(writer):
-                    pdf_inserter.run(csv_path, start=start, end=end)
+                    pdf_inserter.run(csv_path, start=start, end=end,
+                                     stop_event=self.stop_event)
             except Exception as e:
                 writer.write(f"\n[오류] {type(e).__name__}: {e}\n")
             finally:
@@ -539,9 +564,16 @@ class PdfInsertTab:
 
         threading.Thread(target=_runner, daemon=True).start()
 
+    def _on_stop(self):
+        if not self._busy:
+            return
+        self.stop_event.set()
+        self.stop_btn.configure(state=tk.DISABLED, text="중지 중…")
+
     def _on_done(self):
         self._busy = False
         self.start_btn.configure(state=tk.NORMAL, text="PDF 적재 시작")
+        self.stop_btn.configure(state=tk.DISABLED, text="중지")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -610,13 +642,40 @@ class UnifiedApp:
             self.scan_tab, self.pdf_scan_tab,
             self.insert_tab, self.pdf_insert_tab,
         )
-        if any(t._busy for t in busy_tabs):
-            if not messagebox.askyesno(
-                "진행 중 작업",
-                "스캔/적재 작업이 진행 중입니다.\n그래도 창을 닫겠습니까?",
-            ):
-                return
-        self.root.destroy()
+        if not any(t._busy for t in busy_tabs):
+            self.root.destroy()
+            return
+
+        if not messagebox.askyesno(
+            "진행 중 작업",
+            "스캔/적재 작업이 진행 중입니다.\n그래도 창을 닫겠습니까?\n"
+            "(중지 신호를 보낸 뒤 정리되면 자동으로 닫힙니다.\n"
+            " 시간 초과 시 강제 종료되며 Job Object 가 워커를 회수합니다.)",
+        ):
+            return
+
+        # HWP/PDF 적재 탭 양쪽에 중지 신호. 스캔 탭은 stop_event 가 없으므로
+        # 시간 초과로 강제 닫기 (Job Object 가 워커 정리).
+        for t in (self.insert_tab, self.pdf_insert_tab):
+            try:
+                t.stop_event.set()
+            except Exception:
+                pass
+
+        self._closing_remaining_ms = 8000  # 최대 8초까지 대기
+        self._poll_close(busy_tabs)
+
+    def _poll_close(self, busy_tabs):
+        if not any(t._busy for t in busy_tabs):
+            self.root.destroy()
+            return
+        self._closing_remaining_ms -= 200
+        if self._closing_remaining_ms <= 0:
+            # 시간 초과 — 그대로 닫는다. 프로세스 종료 시 Job Object 가
+            # 남은 mp.Pool 워커들을 커널 차원에서 회수.
+            self.root.destroy()
+            return
+        self.root.after(200, lambda: self._poll_close(busy_tabs))
 
 
 # ═══════════════════════════════════════════════════════════════

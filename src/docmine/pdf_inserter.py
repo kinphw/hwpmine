@@ -26,6 +26,7 @@ import csv
 import multiprocessing as mp
 import os
 import sys
+import threading
 from pathlib import Path
 
 from . import config
@@ -33,10 +34,11 @@ from .inserter import (
     INSERT_SQL,
     PB,
     _load_existing_keys,
+    _setup_kill_on_close_job,
     create_db,
     get_conn,
 )
-from .pdf_parser import extract_text
+from .pdf_parser import extract_text, win_long_path
 
 PDF_EXTS  = {".pdf"}
 ERROR_LOG = "pdf_parse_errors.csv"
@@ -71,7 +73,11 @@ def _extract_pdf_worker(arg):
 # 메인
 # ================================================================
 
-def run(csv_path: str, start: int = 0, end=None) -> int:
+def run(csv_path: str, start: int = 0, end=None,
+        stop_event: threading.Event | None = None) -> int:
+    # (A) Job Object — 부모가 어떻게 죽든 워커도 같이 죽도록.
+    _setup_kill_on_close_job()
+
     all_rows = []
     with open(csv_path, encoding="utf-8-sig") as f:
         for r in csv.DictReader(f):
@@ -126,28 +132,27 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
         except Exception as e:
             err_w.writerow([d, fn, f"DB: {e}"])
 
-    # ── 1) 사전 점검(직렬) — DB skip / 파일 없음 / 경로 초과 ──
+    # ── 1) 사전 점검(직렬) — DB skip / 파일 없음 ──
+    # 경로 260자 초과는 \\?\ prefix 로 우회 → 더 이상 거부하지 않음.
     tasks: list[tuple[int, str]] = []
     for i, row in enumerate(rows):
+        if stop_event is not None and stop_event.is_set():
+            print("\n  중지 요청됨 (사전 점검 단계).")
+            break
         d, fn = row["directory"], row["filename"]
         fp = os.path.join(d, fn)
         if (d, fn) in known_keys:
             pb.tick("skip")
             continue
-        if not os.path.exists(fp):
+        if not os.path.exists(win_long_path(fp)):
             _insert(row, None, "error", "파일 없음")
-            _commit_if_due()
-            pb.tick("error")
-            continue
-        if len(fp) > 260:
-            _insert(row, None, "error", f"경로 초과({len(fp)}자)")
             _commit_if_due()
             pb.tick("error")
             continue
         tasks.append((i, fp))
 
     # ── 2) 멀티프로세스로 본문 추출, 메인에서 INSERT ──
-    if tasks:
+    if tasks and not (stop_event is not None and stop_event.is_set()):
         workers = max(1, min(config.PDF_WORKERS, len(tasks)))
         cpu = os.cpu_count() or 1
         chunksize = max(1, min(16, len(tasks) // (workers * 8) or 1))
@@ -159,6 +164,11 @@ def run(csv_path: str, start: int = 0, end=None) -> int:
             with mp.Pool(processes=workers) as pool:
                 for idx, status, text, errmsg in pool.imap_unordered(
                         _extract_pdf_worker, tasks, chunksize=chunksize):
+                    # (B) GUI '중지' 버튼 신호 — with 블록 종료 시
+                    # Pool.__exit__ 가 terminate() 를 호출해 워커 즉시 정리.
+                    if stop_event is not None and stop_event.is_set():
+                        print("\n\n  중지 요청됨 — 워커 종료 중…")
+                        break
                     _insert(rows[idx], text, status, errmsg)
                     _commit_if_due()
                     pb.tick(status)
