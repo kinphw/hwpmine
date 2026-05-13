@@ -46,6 +46,30 @@ def win_long_path(path: str | Path) -> str:
     return "\\\\?\\" + p
 
 
+def _extract_page_blocks(page) -> str:
+    """페이지를 'blocks' 모드로 뽑아 y → x 좌표 순으로 정렬해 합친다.
+
+    'text' 모드는 표가 있는 페이지에서 셀이 줄 단위로 섞여 나오는 경우가
+    잦은데(예: 헤더 행과 데이터 행이 좌우로 교차), 블록 단위로 받아 좌표
+    기준으로 다시 정렬하면 표 영역의 가독성이 눈에 띄게 좋아진다.
+
+    blocks 항목 튜플: (x0, y0, x1, y1, text, block_no, block_type)
+    block_type == 0 만 텍스트 블록 (1 은 이미지).
+    """
+    try:
+        blocks = page.get_text("blocks") or []
+    except Exception:
+        return ""
+
+    text_blocks = [b for b in blocks if len(b) >= 7 and b[6] == 0]
+    # 같은 행에 가까운 블록들이 x 순서로 정렬되도록 y0 를 살짝 양자화
+    # (소수점 1자리). PDF 의 부동소수 좌표 미세 차이로 행이 어긋나는
+    # 현상을 줄임.
+    text_blocks.sort(key=lambda b: (round(b[1], 1), round(b[0], 1)))
+
+    return "\n".join(b[4] for b in text_blocks if b[4])
+
+
 def extract_text(filepath: str | Path) -> str:
     """PDF 파일에서 본문 텍스트를 추출해 정리된 문자열로 반환."""
     import fitz  # PyMuPDF
@@ -55,10 +79,7 @@ def extract_text(filepath: str | Path) -> str:
     parts: list[str] = []
     with fitz.open(fp) as doc:
         for page in doc:
-            try:
-                t = page.get_text("text") or ""
-            except Exception:
-                t = ""
+            t = _extract_page_blocks(page)
             if t:
                 parts.append(t)
     return _clean("\n".join(parts))

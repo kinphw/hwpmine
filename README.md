@@ -136,17 +136,20 @@ pip install build
 python -m build         # dist/ 아래에 *.whl 과 *.tar.gz 생성
 ```
 
-PyInstaller 단일 실행파일 빌드:
+PyInstaller 단일 실행파일 빌드 + 배포 zip 패키징을 한 번에:
 
 ```bash
-pyinstaller --clean --noconfirm docmine.spec
+build         # build.bat — 빌드 후 docmine_v<버전>.zip 까지 생성
 ```
 
-배포 zip 생성 (exe + install.bat + .env.example + README.md 묶음):
+`build.bat`은 더블클릭으로도 동작합니다. 두 단계를 직접 돌리고 싶다면:
 
 ```bash
-python make_release.py  # docmine_v<버전>.zip 생성
+pyinstaller docmine.spec --clean --noconfirm   # dist\docmine.exe 생성
+python make_release.py                          # docmine_v<버전>.zip 생성
 ```
+
+버전은 `src/docmine/__init__.py` 의 `__version__` 을 그대로 사용합니다.
 
 ## DB 스키마
 
