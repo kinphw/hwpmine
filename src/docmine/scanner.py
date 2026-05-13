@@ -27,6 +27,7 @@ def scan_files(roots: list[str], extensions: set[str] | None = None) -> list[dic
     target_exts = {e.lower() for e in (extensions or DEFAULT_EXTENSIONS)}
     results = []
     err_count = 0
+    last_milestone = 0  # 1,000 단위로 1회씩만 진행 로그를 찍기 위함
 
     for root in roots:
         print(f"\n  [{root}] 스캔 시작...")
@@ -55,7 +56,9 @@ def scan_files(roots: list[str], extensions: set[str] | None = None) -> list[dic
                 except (PermissionError, OSError):
                     err_count += 1
 
-            if results and len(results) % 1000 == 0:
+            milestone = len(results) // 1000
+            if milestone > last_milestone:
+                last_milestone = milestone
                 print(f"    ... {len(results):,}개 발견", flush=True)
 
     if err_count:
