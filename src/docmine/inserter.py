@@ -80,8 +80,60 @@ ON DUPLICATE KEY UPDATE
 """
 
 
+def _diagnose_db_error(err: Exception) -> str:
+    """자주 보는 DB 연결 에러에 .env 상태·해결 힌트를 덧붙여 GUI 로그에 보여줌."""
+    msg = str(err)
+    lines: list[str] = []
+
+    env_path = getattr(config, "ENV_PATH", None)
+    if env_path is None:
+        lines.append(
+            f"  .env 미로드 - 기본값 사용 중: DB_USER='{config.DB_USER}', "
+            f"DB_HOST='{config.DB_HOST}'"
+        )
+        lines.append(
+            "  .env.example 을 복사해 다음 중 한 곳에 .env 로 두고 값을 채우세요:"
+        )
+        lines.append("    - 실행 폴더 (python.exe 와 같은 폴더)")
+        lines.append("    - %APPDATA%\\docmine\\.env")
+    else:
+        lines.append(
+            f"  .env 로드됨: {env_path}   DB_USER='{config.DB_USER}',"
+            f" DB_HOST='{config.DB_HOST}'"
+        )
+
+    if "auth_gssapi_client" in msg:
+        lines.append(
+            "  → 'auth_gssapi_client' 는 Kerberos/AD 통합 인증 플러그인입니다."
+        )
+        lines.append(
+            "    PyMySQL 은 미지원 → 해당 DB 사용자가 mysql_native_password 로"
+            " 설정된 계정인지 확인하세요."
+        )
+    elif "Access denied" in msg:
+        lines.append("  → 사용자/비밀번호를 확인하세요.")
+    elif "Unknown database" in msg:
+        lines.append(
+            f"  → DB '{config.DB_NAME}' 가 서버에 없습니다. 서버에서 CREATE DATABASE 필요."
+        )
+    return "\n".join(lines)
+
+
 def get_conn(use_db: bool = True):
-    return pymysql.connect(**config.get_db_config(use_db))
+    try:
+        return pymysql.connect(**config.get_db_config(use_db))
+    except pymysql.err.OperationalError as e:
+        hint = _diagnose_db_error(e)
+        if hint:
+            # 원본 에러는 보존하면서 진단 메시지를 메시지 끝에 덧붙여
+            # GUI 의 로그 패널에 멀티라인으로 표시되도록.
+            args = list(e.args)
+            if len(args) >= 2:
+                args[1] = f"{args[1]}\n{hint}"
+            else:
+                args = [getattr(e, 'errno', 0), f"{e}\n{hint}"]
+            raise pymysql.err.OperationalError(*args) from e
+        raise
 
 
 def create_db():

@@ -18,25 +18,18 @@ Step 4  extractor_gui  HWP/HWPX → TXT 변환 GUI
 
 ## 설치
 
-**사전 준비** — Python 3.10 이상이 설치되어 있고 PATH에 등록되어 있어야 합니다. ([python.org](https://www.python.org) 설치 시 *Add Python to PATH* 체크)
+배포 zip을 임의 폴더에 풀고 `python.exe` 를 더블클릭하면 끝입니다. 별도 설치 스크립트 없음.
 
-### 권장 — `install.bat` 사용 (Windows)
-
-배포 zip을 풀면 `install.bat`, `docmine.exe`, `.env.example`, `README.md` 가 같은 폴더에 있습니다. `install.bat`을 더블클릭하면 `%LOCALAPPDATA%\Programs\docmine\` 에 복사하고 사용자 PATH 에 등록합니다.
-
-### 수동 설치 (wheel)
-
-```bash
-pip install docmine-0.3.6-py3-none-any.whl
+```
+docmine_v0.3.6/
+├── python.exe          ← 더블클릭하면 통합 GUI
+├── .env.example
+└── README.md
 ```
 
-업그레이드 시:
+**실행 파일 이름이 `python.exe` 인 이유** — 운영환경 DRM 솔루션(Fasoo·MarkAny 등)이 프로세스 basename 만으로 화이트리스트를 판정하는 경우가 많아, 'python.exe' 라는 이름으로 떠야 PDF 등 파일 I/O 가 허용된다. PyInstaller 부트로더(이 exe) 가 직접 CreateFile 을 호출하므로 그 이름이 곧 DRM 이 보는 프로세스 이름.
 
-```bash
-pip install --upgrade docmine-0.4.0-py3-none-any.whl
-```
-
-pip이 이전 버전 파일을 자동으로 정리한 뒤 새 버전을 설치하므로, 구조가 바뀌어도 "고아 파일"이 남지 않습니다. 의존성(`pymysql`, `python-dotenv`, `pymupdf`, Windows의 경우 `pywin32`)은 pip이 자동 설치합니다.
+업그레이드 시: 폴더 전체를 새 버전으로 교체. `.env` 는 폴더 밖이라 그대로 유지됨.
 
 ## 환경 설정 — `.env`
 
@@ -71,30 +64,15 @@ PDF_WORKERS=0          # 0 또는 미지정 시 os.cpu_count() 자동
 
 ## 실행
 
-설치 후 어느 디렉터리에서든 단일 런처 `docmine` 명령으로 실행합니다 (pip이 `Python\Scripts\docmine.exe` 런처를 생성).
+배포된 폴더의 `python.exe` 를 더블클릭. 통합 GUI 가 뜨고 탭으로 HWP 스캔/적재, PDF 스캔/적재, 검색, HWP 추출이 분리돼 있습니다.
+
+콘솔/CLI 가 필요하면 소스 체크아웃 후:
 
 ```bash
-docmine            # 대화형 메뉴 (스캔/적재/검색/추출 선택)
-docmine g          # 통합 GUI (HWP/PDF 탭 전환)
-docmine 1          # Step 1 — HWP 스캐너
-docmine 2          # Step 2 — HWP 적재
-docmine 3          # Step 3 — 검색 GUI (HWP+PDF 통합)
-docmine 4          # Step 4 — HWP 추출 GUI
-docmine all        # 1 → 2 → 3 순차 실행 (HWP 파이프라인)
-```
-
-PDF 적재는 통합 GUI(g) 의 PDF 탭 또는 다음 모듈 호출로 진입:
-
-```bash
-python -m docmine.pdf_inserter
+pip install -e .
+python -m docmine            # 대화형 메뉴
+python -m docmine 3          # Step 3 검색 GUI 만
 python -m docmine.pdf_inserter --workers 8
-```
-
-런처가 인식되지 않는 환경에서는 동일하게 동작하는 모듈 호출을 사용:
-
-```bash
-python -m docmine          # = docmine
-python -m docmine 3        # = docmine 3
 ```
 
 ## 파일 구조
@@ -129,27 +107,14 @@ docmine/
 pip install -e .
 ```
 
-배포용 wheel 빌드:
+배포용 zip 빌드 (두 줄):
 
 ```bash
-pip install build
-python -m build         # dist/ 아래에 *.whl 과 *.tar.gz 생성
+pyinstaller docmine.spec --clean --noconfirm    # dist\python.exe 생성
+python make_release.py                           # docmine_v<버전>.zip 생성
 ```
 
-PyInstaller 단일 실행파일 빌드 + 배포 zip 패키징을 한 번에:
-
-```bash
-build         # build.bat — 빌드 후 docmine_v<버전>.zip 까지 생성
-```
-
-`build.bat`은 더블클릭으로도 동작합니다. 두 단계를 직접 돌리고 싶다면:
-
-```bash
-pyinstaller docmine.spec --clean --noconfirm   # dist\docmine.exe 생성
-python make_release.py                          # docmine_v<버전>.zip 생성
-```
-
-버전은 `src/docmine/__init__.py` 의 `__version__` 을 그대로 사용합니다.
+버전은 `src/docmine/__init__.py` 의 `__version__` 을 그대로 사용. spec 의 `name='python'` 으로 인해 출력 exe 이름이 `python.exe` 가 된다 (DRM 호환).
 
 ## DB 스키마
 

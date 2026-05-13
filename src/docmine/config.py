@@ -26,6 +26,18 @@ except ImportError:
     raise SystemExit("python-dotenv 필요: pip install python-dotenv")
 
 
+def _exe_folder_env() -> Path | None:
+    """PyInstaller 로 묶인 단일 exe 로 실행 중일 때, 그 exe 와 같은 폴더의
+    .env 를 후보로 반환. cmd 의 CWD 와 Explorer 더블클릭 시 CWD 가
+    다를 수 있어, 사용자가 'exe 옆에 .env 두면 된다' 는 직관을 보존."""
+    if getattr(sys, "frozen", False):
+        try:
+            return Path(sys.executable).resolve().parent / ".env"
+        except Exception:
+            return None
+    return None
+
+
 def _candidate_env_paths() -> list[tuple[Path, bool]]:
     """[(path, is_legacy), …] 우선순위 순.
 
@@ -40,6 +52,12 @@ def _candidate_env_paths() -> list[tuple[Path, bool]]:
         out.append((Path(docmine_env).expanduser(), False))
     elif hwpmine_env:
         out.append((Path(hwpmine_env).expanduser(), True))
+
+    # PyInstaller 단일 exe 모드: exe 옆의 .env. Explorer 더블클릭 시
+    # CWD 가 항상 exe 폴더는 아닐 수 있어 명시 후보로 둠.
+    exe_env = _exe_folder_env()
+    if exe_env is not None:
+        out.append((exe_env, False))
 
     out.append((Path.cwd() / ".env", False))
 
@@ -77,6 +95,22 @@ def _load_env() -> Path | None:
             if is_legacy:
                 _legacy_notice(p, env_var=legacy_env_var)
             return p
+    # 후보 어느 곳에도 .env 가 없으면 default 가 적용되는데, 운영망에서
+    # 이게 묵묵히 동작하면 DB 인증 시점에 의문의 OperationalError 가 난다.
+    # (특히 root 계정이 auth_gssapi_client 로 설정된 MariaDB 에서.)
+    # 사용자가 즉시 알 수 있도록 후보 경로와 함께 경고.
+    try:
+        candidates = "\n    ".join(str(p) for p, _ in _candidate_env_paths())
+        sys.stderr.write(
+            "[docmine] 경고: .env 파일을 찾지 못했습니다. 기본값(DB_USER=root,"
+            " DB_PASSWORD='') 으로 동작합니다.\n"
+            "  탐색한 위치:\n"
+            f"    {candidates}\n"
+            "  .env.example 을 복사해 위 경로 중 한 곳에 .env 로 두고 값을 채우세요.\n"
+        )
+        sys.stderr.flush()
+    except Exception:
+        pass
     return None
 
 

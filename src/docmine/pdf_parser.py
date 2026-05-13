@@ -27,19 +27,33 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
-def win_long_path(path: str | Path) -> str:
-    """Windows MAX_PATH(260자) 우회용 \\?\\ 접두사 적용.
+_MAX_PATH = 260  # Windows 표준 MAX_PATH (널 포함)
 
-    한글·중첩 폴더가 깊은 운영 환경에서는 경로가 260자를 쉽게 넘는다.
-    Win32 API 는 \\?\\ 접두사가 붙은 절대경로에 대해 ~32,767자까지 허용한다.
-    PyMuPDF 의 fitz.open(), os.stat/os.path.exists 양쪽 모두 이 접두사를
-    그대로 받아주므로 통일된 진입점에서 변환한다.
+
+def win_long_path(path: str | Path) -> str:
+    """Windows MAX_PATH(260자) 초과 경로만 \\?\\ 접두사로 우회.
+
+    한글·중첩 폴더가 깊은 운영 환경의 긴 경로(>=260자) 처리를 위해
+    \\?\\ prefix 를 붙이면 Win32 API 가 ~32,767자까지 허용한다.
+
+    단, prefix 가 붙은 경로는 Win32 의 DOS 경로 정규화 단계를 건너뛰고
+    NT object manager 로 직진하기 때문에, 한국 기업 DRM 솔루션
+    (Fasoo/MarkAny/Softcamp 등) 의 파일 I/O 후킹 계층이 발동하지 않아
+    암호화된 원본 바이트가 그대로 호출자에게 전달될 수 있다. 그래서
+    짧은 경로는 손대지 않고, 실제로 260자에 근접·초과하는 경우에만
+    prefix 를 적용한다.
+
+    PyMuPDF 의 fitz.open(), os.stat/os.path.exists 양쪽 모두 prefix
+    유무에 관계없이 동일하게 받아준다.
     """
     s = str(path)
     if os.name != "nt":
         return s
     p = os.path.abspath(s)
     if p.startswith("\\\\?\\"):
+        return p
+    # 짧은 경로는 그대로 — DRM 후킹 호환성 우선.
+    if len(p) < _MAX_PATH:
         return p
     if p.startswith("\\\\"):  # UNC \\server\share\...
         return "\\\\?\\UNC\\" + p[2:]

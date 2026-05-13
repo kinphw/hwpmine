@@ -65,7 +65,7 @@ def diag(path: Path) -> int:
     print()
 
     # ── 1) 일반 open ─────────────────────────────────────────────
-    print("[1] 기본 open(path) 시도")
+    print("[1] 기본 open(path) 시도 — 일반 Win32 경로")
     try:
         doc = fitz.open(str(path))
     except Exception as e:
@@ -83,6 +83,28 @@ def diag(path: Path) -> int:
             return 2
 
     print(f"  ✓ 열림 (페이지 {doc.page_count}쪽)")
+    print()
+
+    # ── 1c) \\?\ 접두사 변형으로도 시도 — DRM 후킹 우회 여부 진단 ────
+    # 정상 경로로는 열리지만 \\?\ 경로로 열면 깨진다면, DRM 솔루션이
+    # 일반 Win32 경로만 후킹하고 \\?\ 직진 경로는 처리하지 못한다는 뜻.
+    abs_path = path.resolve()
+    long_form = "\\\\?\\" + str(abs_path)
+    print(f"[1c] \\\\?\\ 접두사 변형으로 시도  ({long_form})")
+    try:
+        doc2 = fitz.open(long_form)
+        print(f"  ✓ 열림 (페이지 {doc2.page_count}쪽)")
+        try:
+            t = doc2[0].get_text("text") or ""
+            print(f"  첫 페이지 추출 길이: {len(t):,}자")
+        except Exception as e:
+            print(f"  ⚠ 추출 실패: {type(e).__name__}: {e}")
+        doc2.close()
+    except Exception as e:
+        print(f"  ✗ 실패: {type(e).__name__}: {e}")
+        print("  → 정상 경로(1) 는 성공·\\\\?\\ 경로(1c) 는 실패 = DRM 후킹이")
+        print("    \\\\?\\ 변형을 처리하지 못함. win_long_path 가 짧은 경로를")
+        print("    건드리면 안 됨이 확인되는 패턴.")
     print()
 
     # ── 2) 암호/권한 상태 ────────────────────────────────────────
