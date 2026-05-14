@@ -1,8 +1,8 @@
 """
-HWP / HWPX → TXT 변환기
-=========================
-파일 1개 또는 폴더 내 모든 HWP/HWPX를 파싱하여
-하나의 TXT 파일로 추출합니다.
+HWP / HWPX / PDF → TXT 변환기
+================================
+파일 1개 또는 폴더 내 HWP/HWPX/PDF 를 파싱하여
+하나의 TXT 파일로 추출합니다. HWP/PDF 는 체크박스로 개별 선택.
 
 단독 실행:
   python extractor_gui.py
@@ -22,7 +22,8 @@ from . import config
 from .about import show_about
 from .icon import make_app_icon
 
-TARGET_EXT = {".hwp", ".hwpx"}
+HWP_EXTS = {".hwp", ".hwpx"}
+PDF_EXTS = {".pdf"}
 SEPARATOR  = "=" * 80
 
 
@@ -30,12 +31,12 @@ SEPARATOR  = "=" * 80
 # 파일 수집
 # ═══════════════════════════════════════════════════════════════
 
-def collect_files(path: str, single: bool) -> list[Path]:
+def collect_files(path: str, single: bool, exts: set[str]) -> list[Path]:
     p = Path(path)
     if single:
-        return [p] if p.suffix.lower() in TARGET_EXT else []
+        return [p] if p.suffix.lower() in exts else []
     return sorted(
-        f for f in p.rglob("*") if f.suffix.lower() in TARGET_EXT
+        f for f in p.rglob("*") if f.suffix.lower() in exts
     )
 
 
@@ -102,6 +103,21 @@ class ExtractorApp:
 
         ttk.Button(mode_frame, text="?", width=3,
                    command=lambda: show_about(self.root)).pack(side=tk.RIGHT)
+
+        # ── 포맷 선택 ────────────────────────────────────────
+        fmt_frame = ttk.LabelFrame(self.root, text="포맷 선택", padding=8)
+        fmt_frame.pack(fill=tk.X, **pad)
+
+        self.hwp_var = tk.BooleanVar(value=True)
+        self.pdf_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            fmt_frame, text="HWP / HWPX (한/글 COM 파싱)",
+            variable=self.hwp_var,
+        ).pack(side=tk.LEFT)
+        ttk.Checkbutton(
+            fmt_frame, text="PDF (PyMuPDF 텍스트 추출)",
+            variable=self.pdf_var,
+        ).pack(side=tk.LEFT, padx=(20, 0))
 
         # ── 입력 경로 ─────────────────────────────────────────
         src_frame = ttk.LabelFrame(self.root, text="입력 경로", padding=8)
@@ -174,9 +190,22 @@ class ExtractorApp:
         if self.mode_var.get() == "folder":
             path = filedialog.askdirectory(title="폴더 선택")
         else:
+            # 체크박스 상태에 따라 파일 다이얼로그 필터를 구성.
+            patterns: list[str] = []
+            labels: list[str] = []
+            if self.hwp_var.get():
+                patterns += ["*.hwp", "*.hwpx"]
+                labels.append("HWP")
+            if self.pdf_var.get():
+                patterns += ["*.pdf"]
+                labels.append("PDF")
+            if not patterns:
+                patterns = ["*.hwp", "*.hwpx", "*.pdf"]
+                labels = ["HWP", "PDF"]
+            filter_name = "/".join(labels) + " 파일"
             path = filedialog.askopenfilename(
-                title="HWP/HWPX 파일 선택",
-                filetypes=[("HWP 파일", "*.hwp *.hwpx"), ("모든 파일", "*.*")],
+                title=f"{filter_name} 선택",
+                filetypes=[(filter_name, " ".join(patterns)), ("모든 파일", "*.*")],
             )
         if path:
             self.src_var.set(path)
@@ -207,6 +236,15 @@ class ExtractorApp:
             messagebox.showwarning("경로 오류", f"경로가 존재하지 않습니다:\n{src}")
             return
 
+        exts: set[str] = set()
+        if self.hwp_var.get():
+            exts |= HWP_EXTS
+        if self.pdf_var.get():
+            exts |= PDF_EXTS
+        if not exts:
+            messagebox.showwarning("포맷 선택", "HWP 또는 PDF 중 최소 1개를 선택해 주세요.")
+            return
+
         self._stop_flag = False
         self._running   = True
         self.start_btn.configure(state=tk.DISABLED)
@@ -216,7 +254,7 @@ class ExtractorApp:
         import threading
         threading.Thread(
             target=self._run,
-            args=(src, dst, self.mode_var.get() == "file"),
+            args=(src, dst, self.mode_var.get() == "file", exts),
             daemon=True,
         ).start()
 
@@ -253,9 +291,9 @@ class ExtractorApp:
 
     # ── 변환 실행 (백그라운드 스레드) ─────────────────────────
 
-    def _run(self, src: str, dst: str, single: bool):
+    def _run(self, src: str, dst: str, single: bool, exts: set[str]):
         try:
-            files = collect_files(src, single)
+            files = collect_files(src, single, exts)
         except Exception as e:
             self._log(f"[오류] 파일 수집 실패: {e}")
             self._finish()
@@ -263,17 +301,27 @@ class ExtractorApp:
 
         total = len(files)
         if total == 0:
-            self._log("[경고] HWP/HWPX 파일을 찾을 수 없습니다.")
+            fmt_desc = "/".join(sorted(e.lstrip(".").upper() for e in exts))
+            self._log(f"[경고] {fmt_desc} 파일을 찾을 수 없습니다.")
             self._finish()
             return
 
-        self._log(f"[시작] 대상 {total}개 파일 → {dst}")
+        # HWP 워커는 .hwp/.hwpx 파일이 하나라도 있을 때만 spawn (한/글 띄우는
+        # 비용이 크고, PDF 전용 작업에서는 불필요).
+        need_hwp_worker = any(fp.suffix.lower() in HWP_EXTS for fp in files)
+        hwp_count = sum(1 for fp in files if fp.suffix.lower() in HWP_EXTS)
+        pdf_count = sum(1 for fp in files if fp.suffix.lower() in PDF_EXTS)
+        self._log(
+            f"[시작] 대상 {total}개 파일 (HWP {hwp_count} / PDF {pdf_count}) → {dst}"
+        )
         t0 = time.time()
 
-        task_q   = mp.Queue()
-        result_q = mp.Queue()
-        worker   = _spawn_worker(task_q, result_q)
-        self._log(f"  워커 프로세스 시작 (PID {worker.pid})")
+        task_q = result_q = worker = None
+        if need_hwp_worker:
+            task_q   = mp.Queue()
+            result_q = mp.Queue()
+            worker   = _spawn_worker(task_q, result_q)
+            self._log(f"  HWP 워커 프로세스 시작 (PID {worker.pid})")
 
         ok = err = skip = 0
 
@@ -285,32 +333,53 @@ class ExtractorApp:
                         break
 
                     self._set_progress(i, total, fp.name)
+                    suffix = fp.suffix.lower()
 
-                    if len(str(fp)) > 260:
+                    # PDF 는 PyMuPDF 가 \\?\ prefix 까지 처리하므로 경로 길이
+                    # 제한이 없다. HWP COM 은 260자 제한이 있어 사전에 SKIP.
+                    if suffix in HWP_EXTS and len(str(fp)) > 260:
                         self._log(f"  [SKIP] 경로 초과: {fp.name}")
                         skip += 1
                         continue
 
-                    task_q.put((i, str(fp), fp.suffix.lower()))
+                    text: str | None = None
+                    status = "success"
+                    errmsg: str | None = None
 
-                    try:
-                        _, status, text, errmsg = result_q.get(
-                            timeout=config.PARSE_TIMEOUT
-                        )
-                    except Empty:
-                        errmsg = "타임아웃/크래시"
-                        status = "error"
-                        text   = None
+                    if suffix in PDF_EXTS:
                         try:
-                            worker.kill()
-                            worker.join(timeout=5)
-                        except Exception:
-                            pass
-                        import time as _t; _t.sleep(1)
-                        task_q   = mp.Queue()
-                        result_q = mp.Queue()
-                        worker   = _spawn_worker(task_q, result_q)
-                        self._log(f"  워커 재시작 (PID {worker.pid})")
+                            from .pdf_parser import extract_text as pdf_extract
+                            text = pdf_extract(str(fp))
+                            if not text:
+                                # 스캔본/이미지 PDF — 본문 없음. 에러는 아니나
+                                # 출력에 빈 블록을 쓰지 않도록 skip 으로 분류.
+                                status = "skip"
+                                errmsg = "본문 없음(스캔본/이미지 PDF 가능성)"
+                        except Exception as e:
+                            status = "error"
+                            errmsg = f"{type(e).__name__}: {e}"
+                            text = None
+                    else:
+                        # HWP / HWPX → 워커 프로세스
+                        task_q.put((i, str(fp), suffix))
+                        try:
+                            _, status, text, errmsg = result_q.get(
+                                timeout=config.PARSE_TIMEOUT
+                            )
+                        except Empty:
+                            errmsg = "타임아웃/크래시"
+                            status = "error"
+                            text   = None
+                            try:
+                                worker.kill()
+                                worker.join(timeout=5)
+                            except Exception:
+                                pass
+                            import time as _t; _t.sleep(1)
+                            task_q   = mp.Queue()
+                            result_q = mp.Queue()
+                            worker   = _spawn_worker(task_q, result_q)
+                            self._log(f"  HWP 워커 재시작 (PID {worker.pid})")
 
                     if status == "success" and text:
                         out.write(f"{SEPARATOR}\n")
@@ -326,20 +395,22 @@ class ExtractorApp:
                         self._log(f"  [ERR] {fp.name}  →  {errmsg or '알 수 없는 오류'}")
                     else:
                         skip += 1
-                        self._log(f"  [SKIP] {fp.name}")
+                        reason = f"  →  {errmsg}" if errmsg else ""
+                        self._log(f"  [SKIP] {fp.name}{reason}")
 
         except Exception as e:
             self._log(f"[오류] {e}")
         finally:
-            try:
-                task_q.put(None)
-                worker.join(timeout=10)
-            except Exception:
-                pass
-            try:
-                worker.kill()
-            except Exception:
-                pass
+            if worker is not None:
+                try:
+                    task_q.put(None)
+                    worker.join(timeout=10)
+                except Exception:
+                    pass
+                try:
+                    worker.kill()
+                except Exception:
+                    pass
 
         elapsed = time.time() - t0
         self._log(

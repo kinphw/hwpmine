@@ -632,7 +632,7 @@ class UnifiedApp:
         # 추출 — HWP 전용 (한/글 COM 워커 사용)
         from . import extractor_gui
         extract_frame = ttk.Frame(nb)
-        nb.add(extract_frame, text="④ HWP 추출")
+        nb.add(extract_frame, text="④ 문서(HWP+PDF 추출")
         self.extract_app = extractor_gui.ExtractorApp(extract_frame)
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
