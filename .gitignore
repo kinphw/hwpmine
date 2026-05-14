@@ -16,3 +16,4 @@ dist/
 release/
 docmine_v*.zip
 hwpmine_v*.zip
+*.exe

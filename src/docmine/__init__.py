@@ -1,6 +1,6 @@
 """DocMine — HWP/HWPX/PDF 스캔·파싱·적재·검색 파이프라인."""
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __author__ = "kinphw"
 __app_name__ = "DocMine"
 __tagline__ = "www.github.com/kinphw/docmine"

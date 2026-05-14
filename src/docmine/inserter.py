@@ -58,7 +58,10 @@ CREATE TABLE IF NOT EXISTS `{config.DB_TABLE}` (
     parse_status ENUM('success','error','skip','empty') DEFAULT 'success',
     error_msg    VARCHAR(1000),
     parsed_at    DATETIME       DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY   uq_file (directory(500), filename(255))
+    UNIQUE KEY   uq_file (directory(500), filename(255)),
+    INDEX        idx_parse_status (parse_status),
+    INDEX        idx_extension    (extension),
+    INDEX        idx_filename     (filename(191))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
 
@@ -68,6 +71,23 @@ ALTER_STATUS_ENUM = (
     "MODIFY COLUMN parse_status "
     "ENUM('success','error','skip','empty') DEFAULT 'success'"
 )
+
+# 기존 테이블(인덱스 미보유) 보강용. 이미 존재하면 try/except 로 무시.
+#
+# 인덱스가 가속하는 것 / 못 하는 것
+#   ○ parse_status / extension : 메타 필터링
+#   ○ filename(191)            : 파일명 prefix 검색·정렬
+#   × LIKE '%kw%' (선행 %)     : 어떤 B-tree 인덱스도 도움 안 됨 — 풀스캔
+#                                불가피. 본문 검색 가속은 search_gui 의
+#                                쿼리를 MATCH AGAINST 로 바꾸고 FULLTEXT
+#                                인덱스를 추가해야 가능(현재 미적용 —
+#                                한국어 토크나이저 제약 + 본문 LONGTEXT
+#                                FULLTEXT 빌드가 서버 다운 위험).
+DDL_INDEXES = [
+    f"CREATE INDEX idx_parse_status ON `{config.DB_TABLE}` (parse_status)",
+    f"CREATE INDEX idx_extension    ON `{config.DB_TABLE}` (extension)",
+    f"CREATE INDEX idx_filename     ON `{config.DB_TABLE}` (filename(191))",
+]
 
 INSERT_SQL = f"""
 INSERT INTO `{config.DB_TABLE}`
@@ -148,6 +168,13 @@ def create_db():
             cur.execute(ALTER_STATUS_ENUM)
         except Exception:
             pass
+        # 기존 테이블에 인덱스가 없으면 추가. 이미 있으면 1061 (Duplicate
+        # key name) 가 떨어지는데 무시.
+        for ddl in DDL_INDEXES:
+            try:
+                cur.execute(ddl)
+            except Exception:
+                pass
     conn.commit()
     conn.close()
     print(f"  v DB [{config.DB_NAME}] / 테이블 [{config.DB_TABLE}] 준비 완료")
