@@ -85,6 +85,51 @@ def _prepare_keywords(keyword: str, mode: str) -> list[str]:
     return keyword.split() or []
 
 
+# 키워드 양옆에 잡을 문자 수 — 비대칭. 미리보기 셀(width=500) 이 좁아서 키워드가
+# 중앙에 있으면 잘려보이므로, 키워드를 셀 좌측 가까이 끌어오기 위해 left << right.
+SNIPPET_LEFT  = 20
+SNIPPET_RIGHT = 220
+
+
+def _extract_snippet(body: str, keywords: list[str],
+                     left: int = SNIPPET_LEFT, right: int = SNIPPET_RIGHT) -> str:
+    """본문에서 가장 먼저 나오는 키워드 매치 위치 기준 앞 `left` / 뒤 `right` 자를 잘라 반환.
+    키워드 없거나 매칭 위치를 못 찾으면 본문 앞부분으로 폴백.
+    SQL 단에서 LIKE 로 매칭된 행만 들어오지만 LEFT(5000) 절단으로 매치가 잘려나간
+    경우도 있어 폴백이 필요하다."""
+    if not body:
+        return ""
+    body = body.replace("\r", "").replace("\n", " ")
+    fallback_len = left + right + 30  # 폴백 시 표시할 앞부분 길이
+
+    if not keywords:
+        return body[:fallback_len].strip()
+
+    # 모든 키워드의 첫 매치 중 가장 빠른 위치를 채택 (대소문자 무시).
+    body_lower = body.lower()
+    best_pos, best_kw_len = -1, 0
+    for kw in keywords:
+        if not kw:
+            continue
+        pos = body_lower.find(kw.lower())
+        if pos < 0:
+            continue
+        if best_pos < 0 or pos < best_pos:
+            best_pos, best_kw_len = pos, len(kw)
+
+    if best_pos < 0:
+        return body[:fallback_len].strip()
+
+    start = max(0, best_pos - left)
+    end   = min(len(body), best_pos + best_kw_len + right)
+    snippet = body[start:end].strip()
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(body):
+        snippet = snippet + "…"
+    return snippet
+
+
 def _build_where(keywords: list[str], target: str, mode: str):
     conds, params = [], []
     for kw in keywords:
@@ -128,8 +173,10 @@ def search(keyword: str, target: str, mode: str = "and",
            limit: int = PAGE_SIZE, offset: int = 0, include_excluded: bool = False,
            id_min=None, id_max=None):
     where_sql, params = _compose_where(keyword, target, mode, include_excluded, id_min, id_max)
+    # body_text 를 5000자까지 가져와서 클라이언트에서 키워드 인근으로 스니펫을 잘라낸다.
+    # 200건 × 5KB ≈ 1MB. 5000자 내에 키워드가 없는 케이스는 _extract_snippet 이 앞부분 폴백.
     sql = f"""
-        SELECT id, directory, filename, LEFT(body_text, 300)
+        SELECT id, directory, filename, LEFT(body_text, 5000)
         FROM `{config.DB_TABLE}`
         {where_sql}
         ORDER BY id
@@ -306,7 +353,7 @@ class App:
         self.tree.column("id",        width=50,  minwidth=40,  stretch=False)
         self.tree.column("directory", width=300, minwidth=100)
         self.tree.column("filename",  width=280, minwidth=100)
-        self.tree.column("preview",   width=400, minwidth=100)
+        self.tree.column("preview",   width=500, minwidth=100)
 
         vsb = ttk.Scrollbar(mid, orient=tk.VERTICAL,   command=self.tree.yview)
         hsb = ttk.Scrollbar(mid, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -365,6 +412,10 @@ class App:
         self.more_btn = ttk.Button(bot, text=f"더보기 (+{PAGE_SIZE})", command=self._on_more, state=tk.DISABLED)
         self.more_btn.pack(side=tk.RIGHT, padx=(0, 5))
 
+        # 우클릭 컨텍스트 메뉴 — 항목은 매번 _on_right_click 에서 선택 상태 +
+        # 클릭한 컬럼에 맞춰 동적으로 재빌드한다.
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+
     def _bind_events(self):
         self.entry.bind("<Return>",            lambda e: self._on_search())
         self.id_min_entry.bind("<Return>",     lambda e: self._on_search())
@@ -385,6 +436,7 @@ class App:
         self.tree.bind("<Control-c>",          lambda e: self._on_copy_files())
         self.tree.bind("<Control-C>",          lambda e: self._on_copy_files())
         self.tree.bind("<Control-Insert>",     lambda e: self._on_copy_files())
+        self.tree.bind("<Button-3>",           self._on_right_click)
 
     # ── 로그 ─────────────────────────────────────────────────────
     def _log(self, msg: str):
@@ -410,24 +462,50 @@ class App:
             self._hide_tooltip()
             return
 
-        wrapped = "\n".join(text[i:i+80] for i in range(0, len(text), 80)).strip()
-        if len(wrapped) > 800:
-            wrapped = wrapped[:800] + "\n…"
-        self._show_tooltip(event, wrapped)
+        if len(text) > 800:
+            text = text[:800] + " …"
 
-    def _show_tooltip(self, event, text: str):
+        # 미리보기 컬럼(#4) hover 시에만 키워드 강조. 폴더/파일명에는 의미 없음.
+        keywords = _prepare_keywords(self._last_kw, self._last_mode) if col_id == "#4" else []
+        self._show_tooltip(event, text, keywords)
+
+    def _show_tooltip(self, event, text: str, keywords: list[str] = ()):
         self._hide_tooltip()
         tw = tk.Toplevel(self.root)
         tw.wm_overrideredirect(True)
         tw.wm_attributes("-topmost", True)
 
-        x, y = event.x_root + 15, event.y_root + 10
-        tk.Label(tw, text=text, justify=tk.LEFT,
-                 background="#ffffe0", foreground="#222",
-                 relief=tk.SOLID, borderwidth=1,
-                 font=("맑은 고딕", 9), wraplength=600,
-                 padx=6, pady=4).pack()
+        # tk.Text 사용 이유: tag 로 키워드 부분만 빨간 굵게 강조 가능 (tk.Label 은 부분 색상 불가).
+        width_chars  = 60
+        height_lines = min(20, max(3, len(text) // width_chars + 2))
+        txt = tk.Text(tw, width=width_chars, height=height_lines,
+                      bg="#ffffe0", fg="#222",
+                      relief=tk.SOLID, borderwidth=1,
+                      font=("맑은 고딕", 9), wrap="word",
+                      padx=6, pady=4, cursor="arrow",
+                      highlightthickness=0)
+        txt.insert("1.0", text)
 
+        # 키워드가 있으면 텍스트 내 모든 출현을 빨간 굵게 (대소문자 무시).
+        if keywords:
+            txt.tag_configure("hl", foreground="red", font=("맑은 고딕", 9, "bold"))
+            text_lower = text.lower()
+            for kw in keywords:
+                if not kw:
+                    continue
+                kw_lower, kw_len = kw.lower(), len(kw)
+                start = 0
+                while True:
+                    pos = text_lower.find(kw_lower, start)
+                    if pos < 0:
+                        break
+                    txt.tag_add("hl", f"1.0+{pos}c", f"1.0+{pos + kw_len}c")
+                    start = pos + kw_len
+
+        txt.configure(state="disabled")  # 읽기 전용 — 편집/삽입 방지
+        txt.pack()
+
+        x, y = event.x_root + 15, event.y_root + 10
         tw.update_idletasks()
         sw, sh     = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         tw_w, tw_h = tw.winfo_width(), tw.winfo_height()
@@ -443,10 +521,12 @@ class App:
 
     # ── 검색 ──────────────────────────────────────────────────────
     def _insert_rows(self, rows):
+        # 마지막 검색의 키워드 리스트로 스니펫을 추출 — 키워드 인근 ±SNIPPET_RADIUS 자.
+        kws = _prepare_keywords(self._last_kw, self._last_mode)
         for row in rows:
-            rid, directory, filename, preview = row
-            is_excluded   = not preview  # NULL 또는 빈 문자열
-            preview_full  = ("" if is_excluded else (preview or "")).replace("\r", "").replace("\n", " ").strip()
+            rid, directory, filename, body_chunk = row
+            is_excluded   = not body_chunk  # NULL 또는 빈 문자열
+            preview_full  = "" if is_excluded else _extract_snippet(body_chunk or "", kws)
             preview_short = preview_full[:150] + "…" if len(preview_full) > 150 else preview_full
             dir_short     = directory
             fn_short      = filename[:50]  + "…" if len(filename) > 53  else filename
@@ -659,15 +739,93 @@ class App:
         fp = os.path.join(directory, filename)
         try:
             if os.path.exists(fp):
-                # explorer.exe /select,<path> — 파일이 선택된 상태로 폴더 열림.
-                # 종료 코드가 1 인 경우가 흔해서 check=False.
-                subprocess.run(["explorer.exe", f"/select,{fp}"], check=False)
+                # explorer.exe /select,<path> 는 리스트 인자로 넘기면 CreateProcess 의
+                # quoting 단계에서 따옴표가 끼어들어 explorer 의 특이한 파서가 경로를
+                # 못 읽고 기본 폴더(문서) 로 폴백한다. 슬래시가 섞여도 같은 증상.
+                # normpath 로 백슬래시 통일 + 단일 문자열로 전달해야 안정적.
+                fp_norm = os.path.normpath(fp)
+                subprocess.Popen(f'explorer /select,"{fp_norm}"')
             elif os.path.isdir(directory):
-                os.startfile(directory)
+                os.startfile(os.path.normpath(directory))
             else:
                 messagebox.showwarning("경로 없음", f"경로를 찾을 수 없습니다:\n{directory}")
         except Exception as e:
             messagebox.showerror("열기 실패", str(e))
+
+    # ── 우클릭 컨텍스트 메뉴 ─────────────────────────────────────
+    # _full_data 튜플 = (rid, directory, filename, preview_full).
+    # 컬럼 ID(#1~#4) → (라벨, 튜플 인덱스). ID 컬럼(#1) 은 hover 도 안 뜨므로 제외.
+    _COL_COPY_MAP = {
+        "#2": ("폴더 경로 복사",     1),
+        "#3": ("파일명 복사",         2),
+        "#4": ("내용 미리보기 복사",  3),
+    }
+
+    def _on_right_click(self, event):
+        row_id = self.tree.identify_row(event.y)
+        if not row_id:
+            return  # 빈 영역 우클릭은 무시
+        # 클릭한 행이 현재 선택에 없으면 그 행만 선택. 이미 다중 선택 중이면 유지.
+        if row_id not in self.tree.selection():
+            self.tree.selection_set(row_id)
+            self.tree.focus(row_id)
+
+        sel = self.tree.selection()
+        is_single = len(sel) == 1
+        state_single = tk.NORMAL if is_single else tk.DISABLED
+
+        m = self.context_menu
+        m.delete(0, "end")
+
+        # 컬럼별 셀 복사 — hover 툴팁이 뜨는 컬럼과 한 쌍.
+        col_id = self.tree.identify_column(event.x)
+        col_copy = self._COL_COPY_MAP.get(col_id)
+        if col_copy:
+            label, field_idx = col_copy
+            m.add_command(label=label, command=lambda i=field_idx: self._copy_field(i))
+            m.add_separator()
+
+        m.add_command(label="파일 열기", command=self._on_open,      state=state_single)
+        m.add_command(label="경로 열기", command=self._on_open_path, state=state_single)
+        m.add_separator()
+
+        # 삭제 항목 — 하단 del_btn 과 동일 규칙 (_on_select 참조).
+        excluded_sel = [iid for iid in sel if iid in self._excluded_ids]
+        normal_sel   = [iid for iid in sel if iid not in self._excluded_ids]
+        if excluded_sel and normal_sel:
+            m.add_command(label="혼합 선택 불가",  state=tk.DISABLED)
+        elif excluded_sel:
+            m.add_command(label="완전 삭제 (Del)", command=self._on_delete)
+        else:
+            m.add_command(label="제외 (Del)",      command=self._on_delete)
+
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
+
+    def _copy_field(self, field_idx: int):
+        """선택된 행들의 _full_data[field_idx] 를 줄바꿈으로 합쳐 클립보드에 복사."""
+        sel = self.tree.selection()
+        if not sel:
+            return
+        values = []
+        for iid in sel:
+            full = self._full_data.get(iid)
+            if not full:
+                continue
+            v = full[field_idx]
+            if v is None:
+                continue
+            values.append(str(v))
+        if not values:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(values))
+            self.root.update()
+        except Exception as e:
+            messagebox.showerror("복사 실패", str(e))
 
     # ── Ctrl+C — 클립보드로 파일 복사 (drag 우회용) ──────────────
     def _on_copy_files(self):
