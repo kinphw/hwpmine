@@ -78,7 +78,13 @@ class ExtractorApp:
         self._running   = False
         self._stop_flag = False
 
+        # 저장 파일 자동 채움 상태. 사용자가 dst 를 직접 편집/선택하면 False 로
+        # 바뀌고 그 후로는 src/mode 변경에도 자동 갱신 안 함 (사용자 손맛 보존).
+        self._dst_is_auto = True
+        self._suppress_dst_trace = False
+
         self._build_ui()
+        self._bind_auto_dst()
 
     # ── UI 구성 ───────────────────────────────────────────────
 
@@ -220,7 +226,45 @@ class ExtractorApp:
             filetypes=[("텍스트 파일", "*.txt"), ("모든 파일", "*.*")],
         )
         if path:
-            self.dst_var.set(path)
+            # 사용자가 명시 선택했으므로 이후 자동 갱신 차단.
+            self._dst_is_auto = False
+            self._set_dst_silent(path)
+
+    # ── 저장 파일 자동 채움 ────────────────────────────────────
+    def _bind_auto_dst(self):
+        """src/mode 변경 시 dst 를 자동으로 채우는 trace 등록."""
+        self.src_var.trace_add("write",  self._auto_fill_dst)
+        self.mode_var.trace_add("write", self._auto_fill_dst)
+        self.dst_var.trace_add("write",  self._on_dst_user_change)
+
+    def _set_dst_silent(self, value: str):
+        """dst_var 를 변경하면서 _on_dst_user_change 가 '사용자 편집' 으로 오인하지 않게."""
+        self._suppress_dst_trace = True
+        try:
+            self.dst_var.set(value)
+        finally:
+            self._suppress_dst_trace = False
+
+    def _on_dst_user_change(self, *_):
+        # _set_dst_silent 로 인한 호출은 무시. 그 외엔 사용자가 Entry 를 직접 편집한 것.
+        if self._suppress_dst_trace:
+            return
+        self._dst_is_auto = False
+
+    def _auto_fill_dst(self, *_):
+        if not self._dst_is_auto:
+            return
+        src = self.src_var.get().strip()
+        if not src:
+            return
+        src_path = Path(src)
+        if self.mode_var.get() == "folder":
+            # 폴더 모드: 그 폴더 안에 <폴더명>_extracted.txt. 폴더명 stem 으로 충돌 최소화.
+            default = src_path / f"{src_path.name}_extracted.txt"
+        else:
+            # 파일 모드: 원본 파일 옆에 동일 stem 의 .txt
+            default = src_path.with_suffix(".txt")
+        self._set_dst_silent(str(default))
 
     def _on_start(self):
         src = self.src_var.get().strip()
